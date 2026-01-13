@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: arena-of-champions-bot
+    env: docker
+    plan: free
+    port: 10000

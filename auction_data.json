@@ -1,0 +1,112 @@
+{
+  "auction_proposals": {
+    "1": {
+      "id": 1,
+      "name": "Spl",
+      "creator_id": 6148665855,
+      "creator_name": "Kr\u03c5tik...\ud83d\udc9e",
+      "teams": [
+        "T1",
+        "T2"
+      ],
+      "purse": 100.0,
+      "base_price": 2.0,
+      "created_at": "2025-12-09T22:27:51.324813"
+    }
+  },
+  "approved_auctions": {
+    "1": {
+      "id": 1,
+      "name": "Spl",
+      "creator_id": 6148665855,
+      "creator_name": "Kr\u03c5tik...\ud83d\udc9e",
+      "teams": [
+        "T1",
+        "T2"
+      ],
+      "purse": 100.0,
+      "base_price": 2.0,
+      "status": "active",
+      "group_chat_id": -1002156670371,
+      "created_at": "2025-12-09T22:27:51.324813",
+      "approved_at": "2025-12-09T22:28:11.090293",
+      "registered_captains": {
+        "6148665855": {
+          "user_id": 6148665855,
+          "name": "Kr\u03c5tik...\ud83d\udc9e",
+          "team_name": "T1",
+          "registered_at": "2025-12-09T22:29:02.231063",
+          "status": "approved"
+        },
+        "6998981970": {
+          "user_id": 6998981970,
+          "name": "Aditya",
+          "team_name": "T2",
+          "registered_at": "2025-12-09T22:29:08.769332",
+          "status": "approved"
+        }
+      },
+      "approved_captains": {
+        "6148665855": {
+          "user_id": 6148665855,
+          "name": "Kr\u03c5tik...\ud83d\udc9e",
+          "team_name": "T1",
+          "purse": 100.0,
+          "spent": 0,
+          "players": [],
+          "approved_at": "2025-12-09T22:29:14.415083"
+        },
+        "6998981970": {
+          "user_id": 6998981970,
+          "name": "Aditya",
+          "team_name": "T2",
+          "purse": 100.0,
+          "spent": 0,
+          "players": [],
+          "approved_at": "2025-12-09T22:29:17.799432"
+        }
+      },
+      "registered_players": {
+        "8104346505": {
+          "user_id": 8104346505,
+          "name": "Aditya",
+          "username": "Fkkuuuuuuuu",
+          "registered_at": "2025-12-09T22:29:44.500677",
+          "status": "approved"
+        },
+        "6446381645": {
+          "user_id": 6446381645,
+          "name": "\ud835\udc00\ud80c\udcf5",
+          "username": "anirudh_cha",
+          "registered_at": "2025-12-09T22:30:01.107839",
+          "status": "approved"
+        }
+      },
+      "approved_players": {
+        "8104346505": {
+          "user_id": 8104346505,
+          "name": "Aditya",
+          "username": "Fkkuuuuuuuu",
+          "base_price": 2.0
+        },
+        "6446381645": {
+          "user_id": 6446381645,
+          "name": "\ud835\udc00\ud80c\udcf5",
+          "username": "anirudh_cha",
+          "base_price": 2.0
+        }
+      },
+      "player_queue": [
+        6446381645,
+        8104346505
+      ],
+      "current_player": {
+        "user_id": 6446381645,
+        "name": "\ud835\udc00\ud80c\udcf5",
+        "username": "anirudh_cha",
+        "base_price": 2.0
+      },
+      "current_player_index": 0,
+      "current_bids": {
+        "6148665855": {
+          "captain": 

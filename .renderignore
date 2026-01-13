@@ -1,0 +1,46 @@
+# Render Ignore - Files to exclude from deployment
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs.txt
+
+# Backups
+backups/
+*.backup
+*.bak
+
+# Local development
+.env.local
+.env.development
+
+# Documentation (optional - remove if you want to deploy docs)
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# Database dumps
+*.sql
+
+# CSV files (if not needed)
+*.csv
