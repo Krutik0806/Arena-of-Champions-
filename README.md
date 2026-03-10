@@ -108,10 +108,9 @@ DATABASE_URL=postgresql://user:pass@host:5432/dbname
 SUPER_ADMIN_ID=123456789
 ADMIN_IDS=987654321,111111111,222222222
 
-# Logs Configuration (Optional)
-LOGS_BOT_TOKEN=your_logs_bot_token
-LOGS_CHAT_ID=your_logs_chat_id
-LOGS_ENABLED=True
+# Admin Logging Configuration (Optional)
+ADMIN_LOG_BOT_TOKEN=your_admin_log_bot_token
+ADMIN_LOG_CHAT_ID=your_admin_log_chat_id
 
 # Deployment Configuration (Optional)
 PORT=8080

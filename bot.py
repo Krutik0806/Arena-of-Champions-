@@ -11,6 +11,7 @@ import requests
 import threading
 import re
 import html
+import functools
 from datetime import date, datetime
 from typing import Optional, Dict, List, Tuple, Union, Any, Callable
 from contextlib import contextmanager
@@ -664,6 +665,7 @@ def paginate_text(text: str, max_length: int = 4000) -> List[str]:
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup, error as telegram_error
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 from telegram.error import BadRequest
+from telegram.constants import ChatType
 import psycopg2
 from psycopg2 import sql, pool
 from psycopg2.extras import RealDictCursor
@@ -671,6 +673,166 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# ================================
+# ADMIN LOGGING CONFIGURATION
+# ================================
+ADMIN_LOG_BOT_TOKEN = os.getenv('ADMIN_LOG_BOT_TOKEN', '')
+ADMIN_LOG_CHAT_ID = os.getenv('ADMIN_LOG_CHAT_ID', '')
+
+# ================================
+# ADMIN LOGGING FUNCTIONS
+# ================================
+
+async def send_admin_log(message: str, log_type: str = "info", chat_context: str = "Unknown"):
+    """
+    Send log message to admin log chat using separate logging bot.
+    
+    Args:
+        message: The log message to send
+        log_type: Type of log (info, command, error, match, db_error, success, warning, game, user, admin)
+        chat_context: Where the action occurred (DM or Group name with ID)
+    
+    Usage:
+        await send_admin_log("User banned", log_type="success", chat_context="DM")
+        await send_admin_log("CMD: /ban by Admin", log_type="command", chat_context="GC: Main Chat")
+    """
+    # Skip if logging is not configured
+    if not ADMIN_LOG_BOT_TOKEN or not ADMIN_LOG_CHAT_ID:
+        logger.warning("Admin logging not configured - skipping log")
+        return
+    
+    try:
+        # Emoji mapping for different log types
+        emoji_map = {
+            "info": "ℹ️",
+            "command": "⚡",
+            "error": "❌",
+            "match": "🏏",
+            "game": "🎮",
+            "db_error": "🔴",
+            "success": "✅",
+            "warning": "⚠️",
+            "user": "👤",
+            "admin": "👑",
+            "auction": "🎪",
+            "economy": "💎",
+            "system_event": "⚙️",
+            "nightmare_win": "👑"
+        }
+        
+        emoji = emoji_map.get(log_type, "📝")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Add bot identifier to distinguish between bots
+        bot_name = "🎮 Arena of Champions"
+        
+        # Format the log message
+        log_message = (
+            f"{emoji} <b>{log_type.upper()}</b> | {bot_name}\n"
+            f"⏰ {timestamp}\n"
+            f"📍 Context: {chat_context}\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"{message}"
+        )
+        
+        # Use aiohttp for direct API call (more reliable than Bot instance)
+        import aiohttp
+        url = f"https://api.telegram.org/bot{ADMIN_LOG_BOT_TOKEN}/sendMessage"
+        data = {
+            'chat_id': ADMIN_LOG_CHAT_ID,
+            'text': log_message,
+            'parse_mode': 'HTML'
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=data) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"Failed to send admin log. Status: {response.status}, Response: {error_text}")
+                else:
+                    logger.debug(f"Admin log sent successfully: {log_type}")
+        
+    except Exception as e:
+        # Log to console but don't break main bot if logging fails
+        logger.error(f"Admin log error: {type(e).__name__}: {e}", exc_info=True)
+
+
+def get_chat_context(update: Update) -> str:
+    """
+    Get formatted chat context showing where a command was used.
+    
+    Args:
+        update: The Telegram update object
+    
+    Returns:
+        Formatted string like "DM" or "GC: GroupName (ID: -1001234567890)"
+    
+    Usage:
+        chat_ctx = get_chat_context(update)
+        await send_admin_log("Command used", chat_context=chat_ctx)
+    """
+    try:
+        if update.effective_chat.type == ChatType.PRIVATE:
+            return "DM"
+        else:
+            chat_title = update.effective_chat.title or "Unknown Group"
+            chat_id = update.effective_chat.id
+            return f"GC: {chat_title} (ID: {chat_id})"
+    except Exception:
+        return "Unknown"
+
+def log_command(command_name: str = None):
+    """
+    Decorator to automatically log all command usage to admin logs.
+    
+    Usage:
+        @log_command("start")
+        async def start_command(update, context):
+            pass
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+            try:
+                # Get command info
+                cmd_name = command_name or func.__name__.replace('_command', '').replace('_callback', '')
+                user = update.effective_user
+                chat_ctx = get_chat_context(update)
+                
+                # Get command text if available
+                cmd_text = ""
+                if update.message and update.message.text:
+                    cmd_text = update.message.text[:100]  # First 100 chars
+                elif update.callback_query and update.callback_query.data:
+                    cmd_text = f"Callback: {update.callback_query.data[:50]}"
+                
+                # Format log message
+                log_msg = f"👤 User: {user.first_name} (@{user.username or 'none'}, ID: {user.id})\n"
+                if cmd_text:
+                    log_msg += f"💬 Command: {cmd_text}"
+                
+                # Log to admin chat (async, non-blocking)
+                try:
+                    await send_admin_log(
+                        log_msg,
+                        log_type="command",
+                        chat_context=chat_ctx
+                    )
+                except Exception as log_error:
+                    # Don't let logging errors break commands
+                    logger.debug(f"Failed to log command {cmd_name}: {log_error}")
+                
+                # Execute the original command
+                return await func(update, context, *args, **kwargs)
+                
+            except Exception as e:
+                # Log error but don't suppress it
+                logger.error(f"Error in command {command_name or func.__name__}: {e}")
+                raise
+        
+        return wrapper
+    return decorator
 
 async def safe_edit_message(query, text: str, **kwargs) -> bool:
     """Safely edit a message with proper error handling"""
@@ -1512,7 +1674,12 @@ def check_banned(func):
     """Decorator to check if user is banned, channel membership, and registered before executing command"""
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         try:
+            # Check if update has a user - some updates (channel posts, etc.) don't have users
             user = update.effective_user
+            if not user:
+                # No user in this update, skip checks and proceed
+                return await func(update, context, *args, **kwargs)
+            
             user_id = user.id
             
             # Access bot_instance from globals (defined later in the file)
@@ -1803,7 +1970,7 @@ class ApprovedAuction:
         self.bidding_active = False
         self.unsold_players = {}
         self.countdown_seconds = 30
-        self._bid_lock = asyncio.Lock()  # Async lock for race condition prevention in async context
+        self._bid_lock = threading.Lock()  # Thread lock for race condition prevention in bidding
         self.last_bid_time = None  # Track timing
         self.is_paused = False
         self.randomize_players = True
@@ -1911,16 +2078,6 @@ class ArenaOfChampionsBot:
             raise ValueError("BOT_TOKEN environment variable is required")
         if not self.db_url:
             raise ValueError("DATABASE_URL environment variable is required")
-        
-        # Logs configuration
-        self.logs_bot_token = os.getenv('LOGS_BOT_TOKEN')
-        self.logs_chat_id = int(os.getenv('LOGS_CHAT_ID', '0'))
-        self.logs_enabled = bool(os.getenv('LOGS_ENABLED', 'True').lower() in ['true', '1', 'yes'])
-        
-        # Validate logs configuration if logs are enabled
-        if self.logs_enabled and not self.logs_bot_token:
-            logger.warning("LOGS_BOT_TOKEN not set but logs are enabled. Disabling logs.")
-            self.logs_enabled = False
         
         # Initialize connection pool
         try:
@@ -2422,11 +2579,9 @@ class ArenaOfChampionsBot:
                         try:
                             async def send_pool_usage_log():
                                 try:
-                                    await self.send_admin_log(
-                                        'system_event',
+                                    await send_admin_log(
                                         f"High database pool usage: {pool_size}/{self.db_pool.maxconn} connections in use ({pool_size/self.db_pool.maxconn*100:.1f}%)",
-                                        None,
-                                        "System"
+                                        'system_event'
                                     )
                                 except Exception as e:
                                     logger.debug(f"Could not send pool usage log: {e}")
@@ -2452,11 +2607,9 @@ class ArenaOfChampionsBot:
                     try:
                         async def send_pool_exhaustion_log():
                             try:
-                                await self.send_admin_log(
-                                    'error',
+                                await send_admin_log(
                                     "Database connection pool EXHAUSTED - all connections in use",
-                                    None,
-                                    "System"
+                                    'error'
                                 )
                             except Exception as e:
                                 logger.debug(f"Could not send pool exhaustion log: {e}")
@@ -5012,66 +5165,6 @@ class ArenaOfChampionsBot:
             self.return_db_connection(conn)
 
     # ====================================
-    # ADMIN LOGS SYSTEM
-    # ====================================
-    
-    async def send_admin_log(self, log_type: str, message: str, user_id: int = None, username: str = None) -> bool:
-        """Send log messages to admin logs group chat"""
-        if not self.logs_enabled:
-            return True
-            
-        try:
-            # Format the log message with timestamp and icons
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Choose emoji based on log type
-            emoji_map = {
-                'admin_action': '🔧',
-                'nightmare_win': '👑',
-                'achievement': '🏆', 
-                'system_event': '⚙️',
-                'error': '🚨',
-                'security': '🔒',
-                'database': '💾',
-                'leaderboard': '📊'
-            }
-            
-            emoji = emoji_map.get(log_type, '📝')
-            
-            # Format user info if provided
-            user_info = ""
-            if user_id:
-                if username:
-                    user_info = f"\n👤 <b>User:</b> @{username} (ID: {user_id})"
-                else:
-                    user_info = f"\n👤 <b>User ID:</b> {user_id}"
-            
-            formatted_message = f"{emoji} <b>[{log_type.upper().replace('_', ' ')}]</b>\n" \
-                              f"🕒 <b>Time:</b> {timestamp}" \
-                              f"{user_info}\n" \
-                              f"📋 <b>Details:</b> {message}"
-            
-            # Send using the logs bot
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                url = f"https://api.telegram.org/bot{self.logs_bot_token}/sendMessage"
-                data = {
-                    'chat_id': self.logs_chat_id,
-                    'text': formatted_message,
-                    'parse_mode': 'HTML'
-                }
-                async with session.post(url, data=data) as response:
-                    if response.status == 200:
-                        return True
-                    else:
-                        logger.error(f"Failed to send admin log: {response.status}")
-                        return False
-                        
-        except Exception as e:
-            logger.error(f"Error sending admin log: {e}")
-            return False
-
-    # ====================================
     # NIGHTMARE MODE METHODS
     # ====================================
     
@@ -5315,11 +5408,9 @@ class ArenaOfChampionsBot:
                     try:
                         async def send_nightmare_victory_log():
                             try:
-                                await self.send_admin_log(
-                                    'nightmare_win',
+                                await send_admin_log(
                                     f"🔥 NIGHTMARE MODE VICTORY! [20K/2ATT] Player: {game['player_name']} | Target: {game['current_number']:,} | Guess: {guess:,} | Attempts: {attempts_used}/2 | Reward: 10,000 shards",
-                                    game['player_telegram_id'],
-                                    None
+                                    'nightmare_win'
                                 )
                             except Exception as e:
                                 logger.debug(f"Could not send nightmare victory log: {e}")
@@ -6449,6 +6540,7 @@ class ArenaOfChampionsBot:
 # ====================================
 
 @check_banned
+@log_command("daily")
 async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Claim daily shard bonus"""
     try:
@@ -6502,6 +6594,7 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                        parse_mode='HTML')
 
 @check_banned
+@log_command("shards")
 async def shards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show detailed shard balance and last 5 transactions"""
     try:
@@ -6632,7 +6725,7 @@ async def shards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                        parse_mode='HTML')
 
 @check_banned
-
+@log_command("giveshards")
 async def give_shards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin command to give shards to a player"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -6724,6 +6817,7 @@ async def give_shards_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                        "❌ Error giving shards. Please try again.", 
                        parse_mode='HTML')
 
+@log_command("removeshards")
 async def remove_shards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin command to remove shards from a player"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -6802,6 +6896,7 @@ async def remove_shards_command(update: Update, context: ContextTypes.DEFAULT_TY
                        "❌ Error removing shards. Please try again.", 
                        parse_mode='HTML')
 
+@log_command("distributedaily")
 async def distribute_daily_rewards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually distribute daily rewards to top 10 users from /dailylb (Admin only)"""
     user_id = update.effective_user.id
@@ -6882,6 +6977,7 @@ async def distribute_daily_rewards_command(update: Update, context: ContextTypes
                        "❌ Error distributing daily rewards. Please try again.", 
                        parse_mode='HTML')
 
+@log_command("resetdailylb")
 async def reset_daily_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reset daily leaderboard data (Admin only)"""
     user_id = update.effective_user.id
@@ -6923,6 +7019,7 @@ async def reset_daily_leaderboard_command(update: Update, context: ContextTypes.
                        "❌ Error resetting daily leaderboard. Please try again.", 
                        parse_mode='HTML')
 
+@log_command("dlbstats")
 async def daily_leaderboard_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show daily leaderboard statistics (Admin only)"""
     user_id = update.effective_user.id
@@ -6991,6 +7088,7 @@ async def daily_leaderboard_stats_command(update: Update, context: ContextTypes.
                        "❌ Error retrieving daily leaderboard stats. Please try again.", 
                        parse_mode='HTML')
 
+@log_command("confirmach")
 async def confirm_achievement_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Confirm special achievement (Admin only)"""
     user_id = update.effective_user.id
@@ -7047,6 +7145,7 @@ async def confirm_achievement_command(update: Update, context: ContextTypes.DEFA
                        "❌ Error confirming achievement. Please try again.", 
                        parse_mode='HTML')
 
+@log_command("pendingconf")
 async def list_pending_confirmations_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List pending achievement confirmations (Admin only)"""
     user_id = update.effective_user.id
@@ -7095,6 +7194,7 @@ async def list_pending_confirmations_command(update: Update, context: ContextTyp
 # ====================================
 
 @check_banned
+@log_command("nightmare")
 async def nightmare_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start or continue nightmare mode game"""
     try:
@@ -7480,6 +7580,7 @@ async def handle_nightmare_guess(update: Update, context: ContextTypes.DEFAULT_T
         return False
 
 @check_banned
+@log_command("dailylb")
 async def dailylb_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show daily leaderboard with toggle buttons for Chase/Guess"""
     try:
@@ -7787,6 +7888,7 @@ async def schedule_daily_rewards():
 bot_instance = ArenaOfChampionsBot()
 
 @check_banned
+@log_command("start")
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
     user = update.effective_user
@@ -7878,6 +7980,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(welcome_message, parse_mode='HTML')
 
 @check_banned
+@log_command("help")
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show paginated help information based on user role."""
     user_id = update.effective_user.id
@@ -7922,6 +8025,7 @@ Choose a category below to explore:
     await safe_send(update.message.reply_text, welcome_message, parse_mode='HTML', reply_markup=reply_markup)
 
 @check_banned
+@log_command("update")
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show bot update information with user and admin sections"""
     user_id = update.effective_user.id
@@ -8249,6 +8353,7 @@ async def update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(back_keyboard))
 
 @check_banned
+@log_command("commands")
 async def commands_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show all available commands with pagination based on user role"""
     user_id = update.effective_user.id
@@ -9186,6 +9291,7 @@ def update_roast_usage(conn, roast_line, player_id):
 
 
 @check_banned
+@log_command("quit")
 async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Quit all active games and show current status"""
     user = update.effective_user
@@ -9272,6 +9378,7 @@ async def quit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 @check_banned
+@log_command("goat")
 async def goat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Select and announce the GOAT (Greatest Of All Time) player of the day."""
     today = date.today()
@@ -9499,6 +9606,7 @@ async def goat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         bot_instance.return_db_connection(conn)
 
 @check_banned
+@log_command("myroast")
 async def my_roast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show all roast lines used for the calling player with dates in a table format."""
     user_id = update.effective_user.id
@@ -9629,6 +9737,7 @@ def get_user_active_games(user_id: int) -> int:
                if state.get("player_id") == user_id and state.get("active", False))
 
 @check_banned
+@log_command("chase")
 async def chase_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the Run Chase Simulator with enhanced performance"""
     user = update.effective_user
@@ -10100,6 +10209,7 @@ async def chase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass  # Final fallback
 
 @check_banned
+@log_command("chasestats")
 async def chase_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show chase game statistics - Public command with personal stats"""
     user = update.effective_user
@@ -10146,6 +10256,7 @@ async def chase_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(message, parse_mode="HTML", reply_markup=reply_markup)
 
 @check_banned
+@log_command("leaderboard")
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display the Chase Game Leaderboard - Modern Block Style"""
     try:
@@ -10212,6 +10323,7 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 
+@log_command("cleanupchase")
 async def cleanup_chase_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin command to force cleanup all chase games"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -10255,6 +10367,7 @@ async def cleanup_chase_command(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode="HTML"
     )
 
+@log_command("adminstatus")
 async def admin_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show comprehensive admin status with hierarchy and potential conflicts"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -10363,6 +10476,7 @@ async def admin_status_command(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await update.message.reply_text(message, parse_mode='HTML')
 
+@log_command("broadcast")
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin command to broadcast messages to all registered users"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -10651,6 +10765,7 @@ async def broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     logger.info(f"Broadcast completed: {success_count}/{total_recipients} successful")
 
+@log_command("emojis")
 async def emojis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show emoji guide for achievements"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -10693,6 +10808,7 @@ async def emojis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 """
     await update.message.reply_text(emoji_guide, parse_mode='HTML')
 
+@log_command("addadmin")
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add new admin (Super Admin only)"""
     if not bot_instance.is_super_admin(update.effective_user.id):
@@ -10739,6 +10855,7 @@ async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         await update.message.reply_text("❌ <b>FAILED!</b> User might already be an admin.", parse_mode='HTML')
 
+@log_command("removeadmin")
 async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Remove admin (Super Admin only)"""
     if not bot_instance.is_super_admin(update.effective_user.id):
@@ -10778,6 +10895,7 @@ async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text("❌ <b>FAILED!</b> User might not be an admin.", parse_mode='HTML')
 
+@log_command("listadmins")
 async def list_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all admins"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -10809,6 +10927,7 @@ async def list_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     await update.message.reply_text(message, parse_mode='HTML')
 
+@log_command("bulkaward")
 async def bulk_award_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Bulk award achievement to multiple players"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -10909,6 +11028,7 @@ async def bulk_award_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await update.message.reply_text(message, parse_mode='HTML')
 
+@log_command("resetplayer")
 async def reset_player_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reset player data (Admin and Super Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -10947,6 +11067,7 @@ async def reset_player_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
+@log_command("addachievement")
 async def add_achievement_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add achievement to player (Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -11004,6 +11125,7 @@ async def add_achievement_command(update: Update, context: ContextTypes.DEFAULT_
     else:
         await update.message.reply_text("❌ <b>FAILED!</b> Unable to add achievement. Please try again.", parse_mode='HTML')
 
+@log_command("removeachievement")
 async def remove_achievement_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Remove achievement from player (Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -11073,6 +11195,7 @@ async def remove_achievement_command(update: Update, context: ContextTypes.DEFAU
             parse_mode='HTML'
         )
 
+@log_command("settitle")
 async def set_title_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set player title (Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -11120,6 +11243,7 @@ async def set_title_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         await update.message.reply_text("❌ <b>FAILED!</b> Unable to set title. Please try again.", parse_mode='HTML')
 
+@log_command("removetitle")
 async def remove_title_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Remove player title (Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -11222,6 +11346,7 @@ async def finduser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     await update.message.reply_text(message, parse_mode='HTML')
 
+@log_command("banuser")
 async def banuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ban user (Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -11336,6 +11461,7 @@ async def unbanuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         await update.message.reply_text("❌ <b>Failed to unban user!</b> Database error or user was not banned.", parse_mode='HTML')
 
+@log_command("restart")
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Restart bot (Super Admin only) - Placeholder implementation"""
     if not bot_instance.is_super_admin(update.effective_user.id):
@@ -11353,6 +11479,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         parse_mode='HTML'
     )
 
+@log_command("backup")
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Create database backup (Super Admin only) - Placeholder implementation"""
     if not bot_instance.is_super_admin(update.effective_user.id):
@@ -11371,6 +11498,7 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         parse_mode='HTML'
     )
 
+@log_command("cleancache")
 async def cleancache_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clean bot cache (Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -11418,6 +11546,7 @@ async def cleancache_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.error(f"Error cleaning cache: {e}")
         await update.message.reply_text("❌ Error cleaning cache. Please try again.")
 
+@log_command("cachestatus")
 async def cache_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show comprehensive cache status and health (Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -11521,6 +11650,7 @@ async def cache_status_command(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Error getting cache status: {e}")
         await update.message.reply_text("❌ Error retrieving cache status. Please try again.")
 
+@log_command("threadsafety")
 async def thread_safety_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show thread safety status of shared data structures (Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -11625,6 +11755,7 @@ async def thread_safety_status_command(update: Update, context: ContextTypes.DEF
         logger.error(f"Error getting thread safety status: {e}")
         await update.message.reply_text("❌ Error retrieving thread safety status. Please try again.")
 
+@log_command("transactions")
 async def transactions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View recent shard transactions (Admin only)"""
     if not bot_instance.is_admin(update.effective_user.id):
@@ -11717,6 +11848,7 @@ async def transactions_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 @check_banned
+@log_command("viewach")
 async def achievements_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View your own achievements"""
     user = update.effective_user
@@ -11745,6 +11877,7 @@ async def achievements_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(message, parse_mode='HTML')
 
 @check_banned
+@log_command("profile")
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View your comprehensive player profile with caching"""
     user = update.effective_user
@@ -11883,6 +12016,8 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode='HTML'
         )
 
+@check_banned
+@log_command("shardlb")
 async def shardlb_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show top 10 shard leaderboard"""
     try:
@@ -13013,6 +13148,7 @@ Only use in absolute emergencies!"""
 # ============ GUESS THE NUMBER GAME COMMANDS ============
 
 @check_banned
+@log_command("guess")
 async def guess_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start a new Guess the Number game"""
     user = update.effective_user
@@ -13120,6 +13256,7 @@ async def guess_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 @check_banned
+@log_command("guessstats")
 async def guess_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View guess game statistics - Public command with personal stats"""
     user = update.effective_user
@@ -13175,6 +13312,7 @@ async def guess_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 @check_banned
+@log_command("guesslb")
 async def guess_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show leaderboard command options"""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -13429,6 +13567,7 @@ async def show_guess_leaderboard_games(update: Update, context: ContextTypes.DEF
             await update.message.reply_text(error_message, parse_mode='HTML')
 
 @check_banned
+@log_command("dailyguess")
 async def daily_guess_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Play daily guess challenge - ONE ATTEMPT ONLY per day"""
     user = update.effective_user
@@ -13540,6 +13679,7 @@ async def daily_guess_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 # Admin command for guess game cleanup
+@log_command("cleanupguess")
 async def cleanup_guess_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Force cleanup of expired guess games (Admin only)"""
     user_id = update.effective_user.id
@@ -13591,6 +13731,7 @@ def format_guess_game_start(game: dict) -> str:
     )
     return message
 
+@log_command("resetall")
 async def reset_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reset database for new Arena Of Champions bot (Super Admin only)"""
     if not bot_instance.is_super_admin(update.effective_user.id):
@@ -13714,6 +13855,7 @@ async def reset_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 
+@log_command("listplayers")
 async def list_players_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all registered players (Super Admin only)"""
     if not bot_instance.is_super_admin(update.effective_user.id):
@@ -13801,6 +13943,7 @@ async def list_players_command(update: Update, context: ContextTypes.DEFAULT_TYP
     finally:
         bot_instance.return_db_connection(conn)
 
+@log_command("botstatus")
 async def bot_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show bot and database status with statistics (Super Admin only)"""
     if not bot_instance.is_super_admin(update.effective_user.id):
@@ -14428,6 +14571,14 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
                     return
                 
                 # Valid bid - update auction state atomically with proper lock
+                # Validate auction has all required attributes
+                if not hasattr(active_auction, 'highest_bid'):
+                    active_auction.highest_bid = active_auction.base_price
+                if not hasattr(active_auction, 'highest_bidder'):
+                    active_auction.highest_bidder = None
+                if not hasattr(active_auction, 'current_bids'):
+                    active_auction.current_bids = {}
+                
                 lock_acquired = active_auction._bid_lock.acquire(blocking=False)
                 if not lock_acquired:
                     await update.message.reply_text("⏳ Previous bid processing, please wait...")
@@ -14474,10 +14625,15 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
                     )
                     
                 except Exception as bid_error:
-                    logger.error(f"Error processing bid: {bid_error}")
-                    # Send fallback message
+                    logger.error(f"Error processing bid: {bid_error}", exc_info=True)
+                    # Send informative fallback message
                     try:
-                        await update.message.reply_text("⚠️ Bid processing issue. Please check with admin.")
+                        await update.message.reply_text(
+                            "⚠️ <b>Bid Processing Error</b>\n\n"
+                            "Your bid couldn't be processed. Please try again.\n"
+                            "If the issue persists, contact the auction host.",
+                            parse_mode='HTML'
+                        )
                     except:
                         pass
                 finally:
@@ -14487,14 +14643,20 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
                 # No automatic display - admin controls with ..
     
     except Exception as e:
-        logger.error(f"Error in handle_manual_auction_input: {e}")
+        logger.error(f"Error in handle_manual_auction_input: {e}", exc_info=True)
         # Send error message with timeout protection
         try:
-            await update.message.reply_text("❌ Bid processing error. Please try again.")
+            await update.message.reply_text(
+                "❌ <b>Auction System Error</b>\n\n"
+                "An error occurred while processing your input.\n"
+                "Please try again or contact the auction host.",
+                parse_mode='HTML'
+            )
         except:
             pass
 
 @check_banned
+@log_command("auctionstatus")
 async def auction_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current auction status"""
     try:
@@ -14547,6 +14709,7 @@ async def auction_status_command(update: Update, context: ContextTypes.DEFAULT_T
             pass
 
 @check_banned
+@log_command("ping")
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Check bot responsiveness and user connection"""
     try:
@@ -15052,6 +15215,7 @@ async def periodic_cleanup():
 # ====================================
 
 @check_banned
+@log_command("start")
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Welcome message and bot introduction"""
     try:
@@ -15194,6 +15358,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ====================================
 
 @check_banned
+@log_command("register")
 async def register_auction_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start auction registration process (ANY USER CAN START)"""
     try:
@@ -15541,6 +15706,7 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
 # ====================================
 
 @check_banned
+@log_command("hostpanel")
 async def hostpanel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Host panel for auction control"""
     try:
@@ -15646,6 +15812,7 @@ async def hostpanel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ====================================
 
 @check_banned
+@log_command("regcap")
 async def registercaptain_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Register as captain for an auction"""
     try:
@@ -15743,6 +15910,7 @@ async def registercaptain_command(update: Update, context: ContextTypes.DEFAULT_
 # ====================================
 
 @check_banned
+@log_command("regplay")
 async def registerplayer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Register as player for an auction (SIMPLE - ONE COMMAND ONLY)"""
     try:
@@ -16325,6 +16493,21 @@ async def handle_auction_sale_callbacks(update: Update, context: ContextTypes.DE
                             f"💰 <b>Sold for:</b> {format_amount(auction.highest_bid)}\n"
                             f"💳 <b>Remaining Purse:</b> {format_amount(winning_captain.purse)}\n\n"
                         )
+                        
+                        # Log player sold to admin
+                        try:
+                            await send_admin_log(
+                                f"💰 PLAYER SOLD\n"
+                                f"🏆 Auction: {auction.name} (ID: {auction.id})\n"
+                                f"👤 Player: {current_player.name}\n"
+                                f"👑 Team: {winning_captain.team_name}\n"
+                                f"💵 Amount: {format_amount(auction.highest_bid)}\n"
+                                f"💳 Purse Remaining: {format_amount(winning_captain.purse)}",
+                                log_type="auction",
+                                chat_context=f"Auction {auction.id}"
+                            )
+                        except Exception as log_err:
+                            logger.debug(f"Failed to log player sold: {log_err}")
                     
                     # Move to next player automatically
                     auction.current_player_index += 1
@@ -16528,7 +16711,8 @@ async def handle_player_approval_callbacks(update: Update, context: ContextTypes
 
 # OLD BID COMMAND REMOVED - NOW CAPTAINS BID BY TYPING AMOUNTS DIRECTLY (1, 2, 5, 10)
 
-@check_banned  
+@check_banned
+@log_command("myteam")
 async def myteam_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show captain's current team"""
     try:
@@ -16581,6 +16765,7 @@ async def myteam_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("purse")
 async def purse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show captain's remaining purse"""
     try:
@@ -16617,6 +16802,7 @@ async def purse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("transfercap")
 async def transfercap_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Transfer captaincy to another user during auction"""
     try:
@@ -16761,6 +16947,7 @@ async def transfercap_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("auctionhelp")
 async def auctionhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show comprehensive auction system help"""
     try:
@@ -16854,6 +17041,7 @@ async def auctionhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("auction")
 async def auction_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start manual auction with first player"""
     try:
@@ -17013,6 +17201,7 @@ async def rebid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("sell")
 async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sell current player to highest bidder (Admin/Host only)"""
     try:
@@ -17080,6 +17269,20 @@ async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
         else:
             # No bids - player goes UNSOLD
+            # Log unsold player to admin
+            try:
+                await send_admin_log(
+                    f"🔴 PLAYER UNSOLD\n"
+                    f"🏆 Auction: {auction.name} (ID: {auction.id})\n"
+                    f"👤 Player: {auction.current_player.name}\n"
+                    f"💎 Base Price: {auction.current_player.base_price}Cr\n"
+                    f"💔 No bids received",
+                    log_type="auction",
+                    chat_context=f"Auction {auction.id}"
+                )
+            except Exception as log_err:
+                logger.debug(f"Failed to log unsold player: {log_err}")
+            
             await update.message.reply_text(
                 f"📤 <b>UNSOLD!</b>\n\n"
                 f"👤 <b>{auction.current_player.name}</b>\n"
@@ -17132,6 +17335,7 @@ async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             pass
 
 @check_banned
+@log_command("setgc")
 async def setgc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set group chat ID for auction"""
     try:
@@ -17175,6 +17379,7 @@ async def setgc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("unsold")
 async def unsold_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View all unsold players in an auction"""
     try:
@@ -17227,6 +17432,7 @@ async def unsold_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("addpt")
 async def addpt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually assign unsold player to a team using username and team name"""
     try:
@@ -17325,6 +17531,7 @@ async def addpt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("pauseauc")
 async def pauseauc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Pause or resume an active auction"""
     try:
@@ -17457,6 +17664,7 @@ async def rebid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @check_banned
+@log_command("participants")
 async def participants_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show all registered participants for an auction"""
     try:
@@ -17533,6 +17741,7 @@ async def participants_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("deleteauction")
 async def delete_auction_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Delete an auction (Admin only)"""
     try:
@@ -17594,6 +17803,7 @@ async def delete_auction_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("listauctions")
 async def list_auctions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all auctions for admin management"""
     try:
@@ -17642,6 +17852,7 @@ async def list_auctions_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("endauction")
 async def force_end_auction_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Force end an active auction (Admin only)"""
     try:
@@ -17696,6 +17907,7 @@ async def force_end_auction_command(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("pending")
 async def pending_auctions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View pending auction proposals (Admin only)"""
     try:
@@ -17743,6 +17955,7 @@ async def pending_auctions_command(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("addpauc")
 async def addpauc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually add players to auction by replying to message with usernames (Admin/Host only)"""
     try:
@@ -17887,6 +18100,7 @@ async def addpauc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("removepauc")
 async def removepauc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Remove players from auction by replying to message with usernames (Admin/Host only)"""
     try:
@@ -17998,6 +18212,7 @@ async def removepauc_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ An error occurred!")
 
 @check_banned
+@log_command("clearauctions")
 async def clear_all_auctions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clear all auction data (Admin only)"""
     try:
@@ -18436,6 +18651,16 @@ async def start_bot():
         
         logger.info("✅ Bot started successfully!")
         
+        # Send startup log to admin
+        try:
+            await send_admin_log(
+                "🚀 Bot has started and is now online!",
+                log_type="info",
+                chat_context="System"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send startup log: {e}")
+        
         # Keep the bot running
         while True:
             await asyncio.sleep(1)
@@ -18448,6 +18673,41 @@ async def start_bot():
             await application.updater.stop()
         await application.stop()
         await application.shutdown()
+
+# ================================
+# GLOBAL ERROR HANDLER
+# ================================
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Global error handler that logs all errors to admin chat"""
+    try:
+        error_msg = str(context.error)
+        
+        # Get user info if available
+        user_info = "Unknown"
+        if update and update.effective_user:
+            user = update.effective_user
+            user_info = f"{user.first_name} (@{user.username or 'no_username'}, ID: {user.id})"
+        
+        # Get chat context
+        chat_ctx = get_chat_context(update) if update else "Unknown"
+        
+        # Get command info if available
+        command_info = ""
+        if update and update.message and update.message.text:
+            command_info = f"\n💬 Command: {update.message.text[:100]}"
+        
+        # Log the error
+        await send_admin_log(
+            f"❌ Unhandled Error\n"
+            f"Error: {error_msg}{command_info}\n"
+            f"User: {user_info}",
+            log_type="error",
+            chat_context=chat_ctx
+        )
+        
+    except Exception as e:
+        print(f"Error in error handler: {e}")
 
 async def main():
     """Main function with web server integration"""
