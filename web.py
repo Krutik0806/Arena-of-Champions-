@@ -1,4 +1,5 @@
-WEB_URL = "https://arena-of-champions-1.onrender.com/"  # Your Render URL
+import os
+WEB_URL = os.getenv("WEB_URL", "https://arena-of-champions.onrender.com/")  # Your Render URL
 WEB_SLEEP = 3 * 60  # Ping every 3 minutes
 
 from aiohttp import web
