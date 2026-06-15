@@ -12,6 +12,7 @@ import threading
 import re
 import html
 import functools
+from collections import deque
 from datetime import date, datetime
 from typing import Optional, Dict, List, Tuple, Union, Any, Callable
 from contextlib import contextmanager
@@ -140,6 +141,10 @@ class Constants:
 class StructuredLogger:
     """Structured logging with context and proper formatting"""
     
+    # In-memory circular buffer shared across all instances (class-level)
+    _log_buffer: deque = deque(maxlen=50)
+    _log_buffer_lock = threading.Lock()
+
     def __init__(self, name: str = "BotLogger"):
         self.logger = logging.getLogger(name)
         self.setup_logger()
@@ -169,6 +174,23 @@ class StructuredLogger:
         }
         
         level_map[level](full_message)
+
+        # Only buffer INFO and above to avoid noise from DEBUG
+        if level != LogLevel.DEBUG:
+            entry = {
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'level': level.value.upper(),
+                'message': full_message
+            }
+            with StructuredLogger._log_buffer_lock:
+                StructuredLogger._log_buffer.append(entry)
+
+    @classmethod
+    def get_recent_logs(cls, count: int = 10) -> list:
+        """Return the most recent `count` log entries (newest first)"""
+        with cls._log_buffer_lock:
+            entries = list(cls._log_buffer)
+        return list(reversed(entries))[:count]
     
     def debug(self, message: str, **context) -> None:
         """Log debug message with context"""
@@ -1574,27 +1596,7 @@ def check_banned(func):
             if not is_command:
                 # Not a command - skip all checks and proceed
                 return await func(update, context, *args, **kwargs)
-            
-            # Check channel membership ONLY for commands
-            is_member, not_joined = await check_channel_membership(user_id, context.bot)
-            if not is_member:
-                # Create inline keyboard with join buttons
-                keyboard = []
-                for channel in not_joined:
-                    keyboard.append([InlineKeyboardButton(f"📢 Join {channel['name']}", url=channel['url'])])
-                keyboard.append([InlineKeyboardButton("✅ I've Joined - Check Again", callback_data="check_membership")])
-                
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await update.message.reply_text(
-                    "🔒 <b>CHANNEL MEMBERSHIP REQUIRED</b>\n\n"
-                    "To use this bot, you must join our official channels:\n\n"
-                    "📢 Join the channels below and click 'Check Again':",
-                    reply_markup=reply_markup,
-                    parse_mode='HTML'
-                )
-                return
-            
+
             # Check if user is banned
             if hasattr(globals().get('bot_instance'), 'is_banned') and bot_instance.is_banned(user_id):
                 # Use effective_message to handle both messages and callbacks
@@ -1814,6 +1816,7 @@ class AuctionProposal:
         self.admin_response_at = None
         self.admin_id = None
         self.admin_name = None
+        self.force_join_links: List[dict] = []  # [{url, chat_id}] GC/channel links players must join
         
 class ApprovedAuction:
     """Represents an approved auction ready for hosting"""
@@ -1829,6 +1832,7 @@ class ApprovedAuction:
         self.created_at = proposal.created_at
         self.approved_at = datetime.now()
         self.group_chat_id = None
+        self.force_join_links: List[dict] = list(proposal.force_join_links)  # Inherited from proposal
         
         # Registration data
         self.registered_captains = {}  # Dict[user_id, CaptainRegistration]
@@ -1899,7 +1903,7 @@ class ApprovedPlayer:
 class AuctionRegistrationState:
     """Tracks the current registration state"""
     def __init__(self):
-        self.step = "name"  # name, teams, purse, base_price, complete
+        self.step = "name"  # name, teams, purse_and_base, force_join_ask, force_join_link, force_join_chatid, force_join_more, complete
         self.data = {}
 
 
@@ -2667,6 +2671,18 @@ class ArenaOfChampionsBot:
                 );
             """)
             
+            # Log Admins table - users who can view /logs
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS log_admins (
+                    id SERIAL PRIMARY KEY,
+                    telegram_id BIGINT UNIQUE NOT NULL,
+                    username VARCHAR(255),
+                    display_name VARCHAR(255),
+                    added_by BIGINT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
             # Chats table - for tracking bot usage
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
@@ -2844,6 +2860,58 @@ class ArenaOfChampionsBot:
     def is_super_admin(self, user_id: int) -> bool:
         """Check if user is super admin (creator) - highest authority"""
         return user_id == self.super_admin_id
+
+    # ── Log Admin helpers ──────────────────────────────────────────────────
+
+    def is_log_admin(self, user_id: int) -> bool:
+        """Return True if user has log-admin privileges (can view /logs)"""
+        try:
+            with self.get_db_connection_ctx() as conn:
+                if not conn:
+                    return False
+                cursor = conn.cursor()
+                cursor.execute("SELECT telegram_id FROM log_admins WHERE telegram_id = %s", (user_id,))
+                result = cursor.fetchone() is not None
+                cursor.close()
+                return result
+        except Exception as e:
+            logger.warning(f"Error checking log-admin status for user {user_id}: {e}")
+            return False
+
+    def add_log_admin(self, user_id: int, username: str, display_name: str, added_by: int) -> bool:
+        """Grant log-admin role to a user"""
+        try:
+            with self.get_db_connection_ctx() as conn:
+                if not conn:
+                    return False
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO log_admins (telegram_id, username, display_name, added_by)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (telegram_id) DO NOTHING
+                """, (user_id, username, display_name, added_by))
+                conn.commit()
+                cursor.close()
+                return True
+        except Exception as e:
+            logger.error(f"Error adding log admin {user_id}: {e}")
+            return False
+
+    def remove_log_admin(self, user_id: int) -> bool:
+        """Revoke log-admin role from a user"""
+        try:
+            with self.get_db_connection_ctx() as conn:
+                if not conn:
+                    return False
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM log_admins WHERE telegram_id = %s", (user_id,))
+                affected = cursor.rowcount
+                conn.commit()
+                cursor.close()
+                return affected > 0
+        except Exception as e:
+            logger.error(f"Error removing log admin {user_id}: {e}")
+            return False
     
     def is_env_admin(self, user_id: int) -> bool:
         """Check if user is environment-defined admin (permanent)"""
@@ -5819,6 +5887,8 @@ class ArenaOfChampionsBot:
             proposal.purse = data['purse']
         if 'base_price' in data:
             proposal.base_price = data['base_price']
+        if 'force_join_links' in data:
+            proposal.force_join_links = data['force_join_links']
         
         return True
     
@@ -10688,6 +10758,165 @@ async def emojis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 """
     await update.message.reply_text(emoji_guide, parse_mode='HTML')
 
+# ====================================
+# LOG ADMIN COMMANDS  (/logs, /givelad)
+# ====================================
+
+@log_command("logs")
+async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the top 10 most recent bot logs (admins & log admins only)"""
+    user_id = update.effective_user.id
+    is_admin = bot_instance.is_admin(user_id)
+    is_log_admin = bot_instance.is_log_admin(user_id)
+
+    if not is_admin and not is_log_admin:
+        await update.message.reply_text(
+            "❌ <b>ACCESS DENIED!</b>\n\n"
+            "🔒 Only bot admins and log admins can view logs!",
+            parse_mode='HTML'
+        )
+        return
+
+    recent = StructuredLogger.get_recent_logs(10)
+
+    if not recent:
+        await update.message.reply_text(
+            "📋 <b>BOT LOGS</b>\n\n"
+            "<i>No logs captured yet since the bot started.</i>",
+            parse_mode='HTML'
+        )
+        return
+
+    LEVEL_ICONS = {
+        'INFO': '🔵',
+        'WARNING': '🟡',
+        'ERROR': '🔴',
+        'CRITICAL': '🚨',
+    }
+
+    lines = ["📋 <b>RECENT BOT LOGS</b> (last 10)\n━━━━━━━━━━━━━━━━━━━━"]
+    for i, entry in enumerate(recent, 1):
+        icon = LEVEL_ICONS.get(entry['level'], '⚪')
+        # Truncate long messages so they fit nicely
+        msg = entry['message'][:200] + ('…' if len(entry['message']) > 200 else '')
+        lines.append(
+            f"<b>{i}.</b> {icon} <code>{entry['timestamp']}</code>\n"
+            f"   <b>[{entry['level']}]</b> {html.escape(msg)}"
+        )
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    message = "\n\n".join(lines)
+    await update.message.reply_text(message, parse_mode='HTML')
+
+
+@log_command("givelad")
+async def give_log_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Grant log-admin role to a user (bot admins only)"""
+    if not bot_instance.is_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "❌ <b>ACCESS DENIED!</b>\n\n🛡️ Only bot admins can grant log-admin roles!",
+            parse_mode='HTML'
+        )
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "❌ <b>INCORRECT USAGE!</b>\n\n"
+            "📝 <b>Format:</b> /givelad &lt;@username or user_id&gt;\n\n"
+            "💡 <b>Examples:</b>\n"
+            "• /givelad @john_cricket\n"
+            "• /givelad 123456789\n\n"
+            "📋 Log admins can view /logs but have no other admin privileges.",
+            parse_mode='HTML'
+        )
+        return
+
+    target_identifier = context.args[0]
+    player = bot_instance.find_player_by_identifier(target_identifier)
+
+    if not player:
+        await update.message.reply_text(
+            f"❌ <b>USER NOT FOUND!</b>\n\n"
+            f"🔍 Could not find: {target_identifier}\n\n"
+            f"💡 User must have interacted with the bot first!",
+            parse_mode='HTML'
+        )
+        return
+
+    if bot_instance.add_log_admin(
+        player['telegram_id'],
+        player['username'],
+        player['display_name'],
+        update.effective_user.id
+    ):
+        await update.message.reply_text(
+            f"✅ <b>LOG ADMIN GRANTED!</b> 📋\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>User:</b> {player['display_name']}\n"
+            f"📱 <b>Username:</b> @{player['username'] or 'N/A'}\n"
+            f"🆔 <b>User ID:</b> {player['telegram_id']}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🔑 They can now use /logs to view bot logs.",
+            parse_mode='HTML'
+        )
+    else:
+        await update.message.reply_text(
+            "❌ <b>FAILED!</b> User might already be a log admin or an error occurred.",
+            parse_mode='HTML'
+        )
+
+
+@log_command("removelad")
+async def remove_log_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Revoke log-admin role from a user (bot admins only)"""
+    if not bot_instance.is_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "❌ <b>ACCESS DENIED!</b>\n\n🛡️ Only bot admins can revoke log-admin roles!",
+            parse_mode='HTML'
+        )
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "❌ <b>INCORRECT USAGE!</b>\n\n"
+            "📝 <b>Format:</b> /removelad &lt;@username or user_id&gt;\n\n"
+            "💡 <b>Examples:</b>\n"
+            "• /removelad @john_cricket\n"
+            "• /removelad 123456789",
+            parse_mode='HTML'
+        )
+        return
+
+    target_identifier = context.args[0]
+    player = bot_instance.find_player_by_identifier(target_identifier)
+
+    if not player:
+        await update.message.reply_text(
+            f"❌ <b>USER NOT FOUND!</b>\n\n"
+            f"🔍 Could not find: {target_identifier}\n\n"
+            f"💡 User must have interacted with the bot first!",
+            parse_mode='HTML'
+        )
+        return
+
+    if bot_instance.remove_log_admin(player['telegram_id']):
+        await update.message.reply_text(
+            f"✅ <b>LOG ADMIN REVOKED!</b> 📋\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>User:</b> {player['display_name']}\n"
+            f"📱 <b>Username:</b> @{player['username'] or 'N/A'}\n"
+            f"🆔 <b>User ID:</b> {player['telegram_id']}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🚫 They can no longer use /logs.",
+            parse_mode='HTML'
+        )
+    else:
+        await update.message.reply_text(
+            "❌ <b>FAILED!</b> User might not be a log admin or an error occurred.",
+            parse_mode='HTML'
+        )
+
+
 @log_command("addadmin")
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add new admin (Super Admin only)"""
@@ -15378,29 +15607,24 @@ async def handle_auction_registration(update: Update, context: ContextTypes.DEFA
                 
                 state.data['purse'] = purse
                 state.data['base_price'] = base_price
-                state.step = "complete"
-                
-                # Update proposal with all data
-                bot_instance.update_proposal_data(proposal_id, state.data)
-                
-                # Send proposal to admins
-                await send_proposal_to_admins(update, proposal_id, context)
-            
-                # Notify user
+                state.data['force_join_links'] = []
+                state.step = "force_join_ask"
+
+                # Ask about force-join
+                keyboard = [
+                    [InlineKeyboardButton("✅ Yes", callback_data=f"fjoin_yes_{user_id}"),
+                     InlineKeyboardButton("❌ No", callback_data=f"fjoin_no_{user_id}")]
+                ]
                 await update.message.reply_text(
-                    f"🎉 <b>Auction Registration Complete!</b>\n\n"
-                    f"📋 <b>Summary:</b>\n"
-                    f"🏆 <b>Name:</b> {state.data['name']}\n"
-                    f"👥 <b>Teams:</b> {len(state.data['teams'])}\n"
-                    f"💰 <b>Team Purse:</b> {format_amount(purse)}\n"
-                    f"💎 <b>Base Price:</b> {format_amount(base_price)}\n\n"
-                    f"📤 <b>Your proposal has been sent to admins for approval.</b>\n"
-                    f"You will be notified once it's reviewed!",
+                    f"✅ <b>Purse & Base Price set!</b>\n\n"
+                    f"💰 <b>Purse:</b> {format_amount(purse)} &nbsp;|&nbsp; 💎 <b>Base:</b> {format_amount(base_price)}\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔗 <b>Force-Join Requirement?</b>\n"
+                    f"Do you want players/captains to <b>join a GC or channel</b> before they can register for this auction?\n\n"
+                    f"Reply <b>yes</b> or <b>no</b>:",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
                     parse_mode='HTML'
                 )
-                
-                # Clean up registration state
-                del bot_instance.registration_states[user_id]
                 
             except ValueError:
                 await update.message.reply_text(
@@ -15410,8 +15634,258 @@ async def handle_auction_registration(update: Update, context: ContextTypes.DEFA
                 )
                 return
                 
+        elif state.step == "force_join_ask":
+            answer = text.strip().lower()
+            if answer in ('yes', 'y'):
+                state.step = "force_join_link"
+                await update.message.reply_text(
+                    "🔗 <b>Force-Join Link</b>\n\n"
+                    "Please send the <b>invite link</b> to the group/channel players must join:\n\n"
+                    "<i>Example: https://t.me/+abc123XYZ or https://t.me/YourChannel</i>",
+                    parse_mode='HTML'
+                )
+            elif answer in ('no', 'n'):
+                # No force-join — finalise immediately
+                await _finalise_auction_registration(update, context, user_id, state, proposal_id)
+            else:
+                await update.message.reply_text(
+                    "⚠️ Please reply <b>yes</b> or <b>no</b>.",
+                    parse_mode='HTML'
+                )
+
+        elif state.step == "force_join_link":
+            link = text.strip()
+            # Basic link validation
+            if not (link.startswith('https://t.me/') or link.startswith('http://t.me/')):
+                await update.message.reply_text(
+                    "❌ <b>Invalid Link!</b>\n\n"
+                    "Please send a valid Telegram invite link.\n"
+                    "<i>Example: https://t.me/+abc123XYZ or https://t.me/YourChannel</i>",
+                    parse_mode='HTML'
+                )
+                return
+
+            path = link.rstrip('/').split('t.me/')[-1]
+
+            if path.startswith('+'):
+                # Private invite link — bot can verify ONLY if it's already in the group
+                # We need the chat ID from the organiser
+                state.data['_pending_fj_url'] = link
+                state.step = "force_join_chatid"
+                await update.message.reply_text(
+                    "🔒 <b>Private Invite Link Detected!</b>\n\n"
+                    "Since this is a private link, please also send the <b>Chat ID</b> of that group/channel "
+                    "so the bot can verify membership.\n\n"
+                    "💡 <b>How to get the Chat ID:</b>\n"
+                    "  1. Add @userinfobot to your group\n"
+                    "  2. It will show the group ID (a negative number like <code>-1001234567890</code>)\n\n"
+                    "Send the Chat ID now:",
+                    parse_mode='HTML'
+                )
+            else:
+                # Public channel/group — auto-extract @username as chat_id
+                chat_id = f"@{path.lstrip('@')}"
+                entry = {'url': link, 'chat_id': chat_id}
+                state.data['force_join_links'].append(entry)
+                total = len(state.data['force_join_links'])
+                state.step = "force_join_more"
+
+                links_text = '\n'.join([f"  {i+1}. {e['url']}" for i, e in enumerate(state.data['force_join_links'])])
+                keyboard = [
+                    [InlineKeyboardButton("➕ Yes, add more", callback_data=f"fjoin_yes_{user_id}"),
+                     InlineKeyboardButton("✅ No, done", callback_data=f"fjoin_no_{user_id}")]
+                ]
+                await update.message.reply_text(
+                    f"✅ <b>Public link added!</b> ({total} total)\n"
+                    f"📊 <b>Chat ID:</b> <code>{chat_id}</code> (auto-detected)\n\n"
+                    f"<b>Force-join links so far:</b>\n{html.escape(links_text)}\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔗 Want to add another GC/channel?",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='HTML'
+                )
+
+        elif state.step == "force_join_chatid":
+            raw = text.strip()
+            # Validate: must be a negative integer (Telegram group/channel IDs are negative)
+            try:
+                chat_id = int(raw)
+                if chat_id >= 0:
+                    raise ValueError("Group IDs are negative numbers")
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ <b>Invalid Chat ID!</b>\n\n"
+                    "The Chat ID must be a <b>negative number</b>\n"
+                    "<i>Example: -1001234567890</i>\n\n"
+                    "Send the correct Chat ID:",
+                    parse_mode='HTML'
+                )
+                return
+
+            pending_url = state.data.pop('_pending_fj_url', None)
+            if not pending_url:
+                state.step = "force_join_more"
+                return
+
+            entry = {'url': pending_url, 'chat_id': chat_id}
+            state.data['force_join_links'].append(entry)
+            total = len(state.data['force_join_links'])
+            state.step = "force_join_more"
+
+            links_text = '\n'.join([f"  {i+1}. {e['url']}" for i, e in enumerate(state.data['force_join_links'])])
+            keyboard = [
+                [InlineKeyboardButton("➕ Yes, add more", callback_data=f"fjoin_yes_{user_id}"),
+                 InlineKeyboardButton("✅ No, done", callback_data=f"fjoin_no_{user_id}")]
+            ]
+            await update.message.reply_text(
+                f"✅ <b>Private link added!</b> ({total} total)\n"
+                f"📊 <b>Chat ID:</b> <code>{chat_id}</code>\n\n"
+                f"<b>Force-join links so far:</b>\n{html.escape(links_text)}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔗 Want to add another GC/channel?",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='HTML'
+            )
+
+        elif state.step == "force_join_more":
+            answer = text.strip().lower()
+            if answer in ('yes', 'y'):
+                state.step = "force_join_link"
+                await update.message.reply_text(
+                    "🔗 Please send the next invite link:",
+                    parse_mode='HTML'
+                )
+            elif answer in ('no', 'n'):
+                await _finalise_auction_registration(update, context, user_id, state, proposal_id)
+            else:
+                await update.message.reply_text(
+                    "⚠️ Please reply <b>yes</b> or <b>no</b>.",
+                    parse_mode='HTML'
+                )
+
     except Exception as e:
         logger.error(f"Error in handle_auction_registration: {e}")
+
+async def _finalise_auction_registration(
+    update, context, user_id: int, state, proposal_id: int
+) -> None:
+    """Finalise auction registration: save data, notify admins, clean up."""
+    bot_instance.update_proposal_data(proposal_id, state.data)
+    await send_proposal_to_admins(update, proposal_id, context)
+
+    links = state.data.get('force_join_links', [])
+    if links:
+        lines = [f"  {i+1}. {e['url']} (Chat ID: {e['chat_id']})" for i, e in enumerate(links)]
+        fj_line = f"\n\U0001f517 <b>Force-Join ({len(links)}):</b>\n{html.escape(chr(10).join(lines))}"
+    else:
+        fj_line = "\n\U0001f517 <b>Force-Join:</b> None"
+
+    summary = (
+        f"\U0001f389 <b>Auction Registration Complete!</b>\n\n"
+        f"\U0001f4cb <b>Summary:</b>\n"
+        f"\U0001f3c6 <b>Name:</b> {state.data['name']}\n"
+        f"\U0001f465 <b>Teams:</b> {len(state.data['teams'])}\n"
+        f"\U0001f4b0 <b>Team Purse:</b> {format_amount(state.data['purse'])}\n"
+        f"\U0001f48e <b>Base Price:</b> {format_amount(state.data['base_price'])}"
+        f"{fj_line}\n\n"
+        f"\U0001f4e4 <b>Your proposal has been sent to admins for approval.</b>\n"
+        f"You will be notified once it's reviewed!"
+    )
+
+    # Send confirmation to the user — works from both message and callback contexts
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=summary,
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"Failed to send finalise confirmation to user {user_id}: {e}")
+
+    del bot_instance.registration_states[user_id]
+
+
+async def check_auction_force_join(auction, user_id: int, bot) -> tuple:
+    """
+    Check if a user has joined all force-join groups/channels for an auction.
+    Each entry in force_join_links is {'url': str, 'chat_id': int|str}.
+    Returns (all_joined: bool, not_joined_entries: List[dict])
+    """
+    if not auction.force_join_links:
+        return True, []
+
+    not_joined = []
+    for entry in auction.force_join_links:
+        chat_id = entry.get('chat_id')
+        url = entry.get('url', '')
+        if not chat_id:
+            # No chat_id stored — can't verify, skip
+            logger.warning(f"Force-join entry has no chat_id, skipping: {url}")
+            continue
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+            if member.status in ('left', 'kicked'):
+                not_joined.append(entry)
+        except Exception as e:
+            logger.warning(f"Could not verify membership for {url} (chat_id={chat_id}): {e}")
+            # If check fails (bot not in group, etc.) — block the user and show the link
+            not_joined.append(entry)
+
+    return len(not_joined) == 0, not_joined
+
+
+async def handle_force_join_callback(update, context) -> None:
+    """Handle fjoin_yes_<user_id> / fjoin_no_<user_id> inline button presses."""
+    query = update.callback_query
+    data = query.data  # e.g. "fjoin_yes_123456789"
+    parts = data.split('_')
+    # parts: ['fjoin', 'yes'|'no', '<user_id>']
+    if len(parts) < 3:
+        return
+
+    action = parts[1]          # 'yes' or 'no'
+    target_user_id = int(parts[2])
+
+    # Only the auction creator who owns this state should interact
+    if query.from_user.id != target_user_id:
+        await query.answer("❌ This button is not for you!", show_alert=True)
+        return
+
+    if target_user_id not in bot_instance.registration_states:
+        await query.answer("⚠️ Session expired. Please /register again.", show_alert=True)
+        return
+
+    state = bot_instance.registration_states[target_user_id]
+    proposal_id = state.data.get('proposal_id')
+
+    if action == 'yes':
+        if state.step in ('force_join_ask', 'force_join_more'):
+            state.step = 'force_join_link'
+            await query.edit_message_text(
+                "🔗 <b>Force-Join Link</b>\n\n"
+                "Send the <b>invite link</b> to the group/channel:\n\n"
+                "• Public: <code>https://t.me/YourChannel</code>\n"
+                "• Private: <code>https://t.me/+abc123XYZ</code> (you'll be asked for Chat ID next)",
+                parse_mode='HTML'
+            )
+    else:  # 'no'
+        if state.step == 'force_join_ask':
+            # No force-join at all — finalise
+            await query.edit_message_text(
+                "✅ <b>No force-join requirement set.</b>\n\nFinalising your auction...",
+                parse_mode='HTML'
+            )
+            await _finalise_auction_registration(update, context, target_user_id, state, proposal_id)
+        elif state.step == 'force_join_more':
+            # Done adding links — finalise
+            await query.edit_message_text(
+                "✅ <b>Force-join links saved.</b>\n\nFinalising your auction...",
+                parse_mode='HTML'
+            )
+            await _finalise_auction_registration(update, context, target_user_id, state, proposal_id)
+
+    await query.answer()
+
 
 async def send_proposal_to_admins(update: Update, proposal_id: int, context: ContextTypes.DEFAULT_TYPE = None) -> None:
     """Send auction proposal to all admins for approval"""
@@ -15430,6 +15904,11 @@ async def send_proposal_to_admins(update: Update, proposal_id: int, context: Con
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        # Format links if exist
+        links = proposal.force_join_links if hasattr(proposal, 'force_join_links') else []
+        fj_text = "\n".join([f"    {i+1}. {e['url']} (ID: {e['chat_id']})" for i, e in enumerate(links)])
+        fj_section = f"\n🔗 <b>Force-Join Links:</b>\n{fj_text}" if links else "\n🔗 <b>Force-Join:</b> None"
+        
         message = (
             f"🏆 <b>New Auction Proposal</b>\n\n"
             f"👤 <b>Creator:</b> {proposal.creator_name}\n"
@@ -15444,7 +15923,8 @@ async def send_proposal_to_admins(update: Update, proposal_id: int, context: Con
         
         message += (
             f"\n💰 <b>Purse per Team:</b> {proposal.purse}Cr\n"
-            f"💎 <b>Base Price:</b> {proposal.base_price}Cr\n\n"
+            f"💎 <b>Base Price:</b> {proposal.base_price}Cr\n"
+            f"{fj_section}\n\n"
             f"⏰ <b>Submitted:</b> {proposal.created_at.strftime('%Y-%m-%d %H:%M')}"
         )
         
@@ -15741,6 +16221,25 @@ async def registercaptain_command(update: Update, context: ContextTypes.DEFAULT_
                 await update.message.reply_text(f"❌ Team '{team_name}' is already taken!")
                 return
         
+        # Check force-join requirement if any links are set for this auction
+        if auction.force_join_links:
+            all_joined, not_joined = await check_auction_force_join(auction, user.id, context.bot)
+            if not all_joined:
+                keyboard = []
+                for entry in not_joined:
+                    keyboard.append([InlineKeyboardButton("📲 Join Group/Channel", url=entry['url'])])
+                links_text = '\n'.join([f"  {i+1}. {e['url']}" for i, e in enumerate(not_joined)])
+                await update.message.reply_text(
+                    f"🔗 <b>Force-Join Required!</b>\n\n"
+                    f"The organiser of <b>{html.escape(auction.name)}</b> (<b>{html.escape(auction.creator_name)}</b>) "
+                    f"requires you to join the following group(s)/channel(s) before registering as a captain:\n\n"
+                    f"{html.escape(links_text)}\n\n"
+                    f"<i>Join them and use /regcap {auction_id} {team_name} again to register.</i>",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='HTML'
+                )
+                return
+
         success = bot_instance.register_captain_request(
             auction_id, user.id, captain_name, team_name
         )
@@ -15829,6 +16328,25 @@ async def registerplayer_command(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("❌ You are already registered as a player!")
             return
         
+        # Check force-join requirement if any links are set for this auction
+        if auction.force_join_links:
+            all_joined, not_joined = await check_auction_force_join(auction, user.id, context.bot)
+            if not all_joined:
+                keyboard = []
+                for entry in not_joined:
+                    keyboard.append([InlineKeyboardButton("📲 Join Group/Channel", url=entry['url'])])
+                links_text = '\n'.join([f"  {i+1}. {e['url']}" for i, e in enumerate(not_joined)])
+                await update.message.reply_text(
+                    f"🔗 <b>Force-Join Required!</b>\n\n"
+                    f"The organiser of <b>{html.escape(auction.name)}</b> (<b>{html.escape(auction.creator_name)}</b>) "
+                    f"requires you to join the following group(s)/channel(s) before registering as a player:\n\n"
+                    f"{html.escape(links_text)}\n\n"
+                    f"<i>Join them and use /regplay {auction_id} again to register.</i>",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='HTML'
+                )
+                return
+
         success = bot_instance.register_player_request(
             auction_id, user.id, user.full_name or user.first_name, user.username
         )
@@ -18381,6 +18899,8 @@ async def auction_callback_router(update: Update, context: ContextTypes.DEFAULT_
         elif data.startswith("start_bidding_"):
             auction_id = int(data.split('_')[-1])
             # Manual control only - no timer
+        elif data.startswith("fjoin_"):
+            await handle_force_join_callback(update, context)
         else:
             await query.edit_message_text(
                 f"❓ Unknown callback: {data}\n\nPlease try again or contact support.",
@@ -18512,6 +19032,9 @@ def register_commands(application):
     application.add_handler(CommandHandler("botstatus", bot_status_command))
     application.add_handler(CommandHandler("update", update_command))
     application.add_handler(CommandHandler("emojis", emojis_command))
+    application.add_handler(CommandHandler("logs", logs_command))
+    application.add_handler(CommandHandler("givelad", give_log_admin_command))
+    application.add_handler(CommandHandler("removelad", remove_log_admin_command))
     
     # ====================================
     # CALLBACK HANDLERS
@@ -18526,7 +19049,8 @@ def register_commands(application):
     application.add_handler(CallbackQueryHandler(chase_callback, pattern="^chase:"))
     application.add_handler(CallbackQueryHandler(broadcast_callback, pattern="^broadcast_"))
     application.add_handler(CallbackQueryHandler(guess_callback, pattern="^guess_"))
-    application.add_handler(CallbackQueryHandler(auction_callback_router, pattern="^(approve_auction_|reject_auction_|host_|approve_player_|reject_player_|approve_captain_|reject_captain_|confirm_sale_|continue_bid_|start_bidding_)"))
+    application.add_handler(CallbackQueryHandler(auction_callback_router, pattern="^(approve_auction_|reject_auction_|host_|approve_player_|reject_player_|approve_captain_|reject_captain_|confirm_sale_|continue_bid_|start_bidding_|fjoin_)"))
+
     
     # ====================================
     # MESSAGE HANDLERS
