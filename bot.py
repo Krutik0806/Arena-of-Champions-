@@ -18926,7 +18926,1152 @@ async def auction_callback_router(update: Update, context: ContextTypes.DEFAULT_
             pass
 
 
+
+# ====================================
+# MINI GAMES MODULE
+# ====================================
+
+# ── Shared game state stores ──────────────────────────────────────────────────
+TRIVIA_GAMES: Dict[int, dict] = {}          # chat_id -> game state
+EMOJI_GAMES: Dict[int, dict] = {}           # user_id -> game state
+SCRAMBLE_GAMES: Dict[int, dict] = {}        # user_id -> game state
+HANGMAN_GAMES: Dict[int, dict] = {}         # user_id -> game state
+WORDLE_GAMES: Dict[int, dict] = {}          # user_id -> game state
+FASTTYPE_GAMES: Dict[int, dict] = {}        # chat_id -> game state
+HPQUIZ_GAMES: Dict[int, dict] = {}         # chat_id -> game state
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA: Cricket Trivia Questions
+# ─────────────────────────────────────────────────────────────────────────────
+TRIVIA_QUESTIONS = [
+    {"q": "Who holds the record for the highest individual score in ODI cricket?", "opts": ["Rohit Sharma", "Martin Guptill", "Chris Gayle", "Virender Sehwag"], "ans": 0},
+    {"q": "Which player has scored the most runs in Test cricket history?", "opts": ["Ricky Ponting", "Sachin Tendulkar", "Kumar Sangakkara", "Jacques Kallis"], "ans": 1},
+    {"q": "Which team won the first-ever ICC Cricket World Cup in 1975?", "opts": ["Australia", "India", "West Indies", "England"], "ans": 2},
+    {"q": "Who is known as 'The God of Cricket'?", "opts": ["Brian Lara", "Sachin Tendulkar", "Don Bradman", "Virat Kohli"], "ans": 1},
+    {"q": "How many players are there in a cricket team?", "opts": ["9", "10", "11", "12"], "ans": 2},
+    {"q": "What is the highest score by a batsman in a single Test innings?", "opts": ["375 by Brian Lara", "400 not out by Brian Lara", "380 by Matthew Hayden", "365 by Garfield Sobers"], "ans": 1},
+    {"q": "Which country has won the most ICC Cricket World Cups?", "opts": ["India", "West Indies", "Australia", "England"], "ans": 2},
+    {"q": "Who took the first hat-trick in T20 International cricket?", "opts": ["Brett Lee", "Lasith Malinga", "Waqar Younis", "Shoaib Akhtar"], "ans": 1},
+    {"q": "What does 'LBW' stand for in cricket?", "opts": ["Leg Before Wicket", "Left Bat Wicket", "Low Ball Wide", "Leg Bat Wide"], "ans": 0},
+    {"q": "Who scored the fastest century in ODI cricket (31 balls)?", "opts": ["Shahid Afridi", "AB de Villiers", "Chris Gayle", "Corey Anderson"], "ans": 1},
+    {"q": "In which year did India win its first Cricket World Cup?", "opts": ["1975", "1979", "1983", "1987"], "ans": 2},
+    {"q": "Who has taken the most wickets in Test cricket?", "opts": ["Shane Warne", "Glenn McGrath", "Muttiah Muralitharan", "Anil Kumble"], "ans": 2},
+    {"q": "What is the maximum number of overs in a T20 match per side?", "opts": ["15", "20", "25", "30"], "ans": 1},
+    {"q": "Which IPL team is known as 'Men in Blue and Gold'?", "opts": ["Mumbai Indians", "Chennai Super Kings", "Kolkata Knight Riders", "Delhi Capitals"], "ans": 2},
+    {"q": "Who captained India to victory in the 2011 Cricket World Cup?", "opts": ["Rahul Dravid", "Sourav Ganguly", "MS Dhoni", "Virat Kohli"], "ans": 2},
+    {"q": "Which bowler has the best bowling average in Test cricket (min 200 wickets)?", "opts": ["Malcolm Marshall", "Dale Steyn", "Joel Garner", "George Lohmann"], "ans": 3},
+    {"q": "What is a 'googly' in cricket?", "opts": ["A wide ball", "An off-break disguised as leg-break", "A leg-break disguised as off-break", "A full toss"], "ans": 2},
+    {"q": "Who hit the first six in the history of T20 World Cup finals?", "opts": ["Chris Gayle", "MS Dhoni", "Yuvraj Singh", "Andrew Flintoff"], "ans": 0},
+    {"q": "How many balls are there in a standard cricket over?", "opts": ["4", "5", "6", "8"], "ans": 2},
+    {"q": "Which player scored 6 sixes in one over in a T20I match?", "opts": ["Chris Gayle", "Yuvraj Singh", "AB de Villiers", "Rohit Sharma"], "ans": 1},
+    {"q": "Who invented cricket?", "opts": ["English", "Australian", "Indian", "South African"], "ans": 0},
+    {"q": "What is the highest team total in ODI cricket?", "opts": ["438 by South Africa", "444 by England", "481 by England", "500 by Sri Lanka"], "ans": 2},
+    {"q": "Who won the inaugural ICC T20 World Cup in 2007?", "opts": ["Australia", "Pakistan", "India", "Sri Lanka"], "ans": 2},
+    {"q": "What is the term for a bowler dismissing 3 batsmen in 3 consecutive balls?", "opts": ["Triple play", "Hat-trick", "Triple wicket", "Three-peat"], "ans": 1},
+    {"q": "Which ground is known as the 'Home of Cricket'?", "opts": ["MCG Melbourne", "Lord's London", "Eden Gardens Kolkata", "SCG Sydney"], "ans": 1},
+    {"q": "Who holds the record for most sixes in a single IPL innings?", "opts": ["Chris Gayle", "AB de Villiers", "Rohit Sharma", "Brendon McCullum"], "ans": 0},
+    {"q": "What does a batter score when they hit the ball to the boundary without it bouncing?", "opts": ["4 runs", "6 runs", "5 runs", "3 runs"], "ans": 1},
+    {"q": "Who scored the first double century in ODI cricket?", "opts": ["Sachin Tendulkar", "Martin Guptill", "Rohit Sharma", "Chris Gayle"], "ans": 0},
+    {"q": "Which country hosted the first ever Cricket World Cup?", "opts": ["Australia", "England", "India", "West Indies"], "ans": 1},
+    {"q": "What is the minimum age to play international cricket?", "opts": ["16", "17", "18", "There is no minimum age"], "ans": 3},
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA: Emoji Cricket Teams
+# ─────────────────────────────────────────────────────────────────────────────
+EMOJI_TEAMS = [
+    {"emojis": "🦁🏙️🔵", "answer": "Mumbai Indians", "aliases": ["mumbai", "mi", "mumbai indians"]},
+    {"emojis": "🦁🌊🟡", "answer": "Chennai Super Kings", "aliases": ["chennai", "csk", "chennai super kings"]},
+    {"emojis": "⚔️🏰🟣", "answer": "Kolkata Knight Riders", "aliases": ["kolkata", "kkr", "kolkata knight riders"]},
+    {"emojis": "🌹👑🔴", "answer": "Royal Challengers Bengaluru", "aliases": ["rcb", "bangalore", "bengaluru", "royal challengers"]},
+    {"emojis": "🏹🔵🦅", "answer": "Delhi Capitals", "aliases": ["delhi", "dc", "delhi capitals"]},
+    {"emojis": "☀️🔶🏄", "answer": "Sunrisers Hyderabad", "aliases": ["hyderabad", "srh", "sunrisers"]},
+    {"emojis": "🌴💜🦂", "answer": "Rajasthan Royals", "aliases": ["rajasthan", "rr", "rajasthan royals"]},
+    {"emojis": "🦁🟠🏏", "answer": "Punjab Kings", "aliases": ["punjab", "pbks", "punjab kings", "kings xi"]},
+    {"emojis": "🐺⚡🟤", "answer": "Lucknow Super Giants", "aliases": ["lucknow", "lsg", "lucknow super giants"]},
+    {"emojis": "🦁🟡🏆", "answer": "Gujarat Titans", "aliases": ["gujarat", "gt", "gujarat titans"]},
+    {"emojis": "🦅🔵🌊", "answer": "Australia", "aliases": ["australia", "aus"]},
+    {"emojis": "🦁🔴⚪", "answer": "England", "aliases": ["england", "eng"]},
+    {"emojis": "🐯🔵🏏", "answer": "India", "aliases": ["india", "ind"]},
+    {"emojis": "⭐🟩🌿", "answer": "Pakistan", "aliases": ["pakistan", "pak"]},
+    {"emojis": "🌺🔵⚡", "answer": "West Indies", "aliases": ["west indies", "wi", "windies"]},
+    {"emojis": "🦚🟢⭐", "answer": "South Africa", "aliases": ["south africa", "sa", "proteas"]},
+    {"emojis": "🌿🦁🔵", "answer": "Sri Lanka", "aliases": ["sri lanka", "sl", "lanka"]},
+    {"emojis": "🥝⚫⚪", "answer": "New Zealand", "aliases": ["new zealand", "nz", "blackcaps"]},
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA: Cricketer Names for Scramble & Hangman
+# ─────────────────────────────────────────────────────────────────────────────
+CRICKETERS = [
+    "KOHLI", "ROHIT", "DHONI", "SACHIN", "DRAVID", "KUMBLE", "SEHWAG", "YUVRAJ",
+    "GANGULY", "ZAHEER", "HARBHAJAN", "BUMRAH", "SHAMI", "JADEJA", "ASHWIN",
+    "GAYLE", "POLLARD", "BRAVO", "HOLDER", "RUSSELL", "NARINE", "HETMYER",
+    "WARNER", "SMITH", "STARC", "HAZLEWOOD", "MAXWELL", "STOINIS", "WADE",
+    "ROOT", "STOKES", "ARCHER", "ANDERSON", "BROAD", "BUTTLER", "BAIRSTOW",
+    "WILLIAMSON", "SOUTHEE", "BOULT", "LATHAM", "CONWAY", "PHILLIPS",
+    "BABAR", "RIZWAN", "SHAHEEN", "RAUF", "NAWAZ", "SHADAB",
+    "DEVILLIERS", "STEYN", "MORKEL", "RABADA", "MILLER", "KLAASEN",
+    "MALINGA", "MATHEWS", "JAYAWARDENE", "DILSHAN", "MENDIS",
+    "MURALITHARAN", "SANGAKKARA", "JAYASURIYA", "CHANDIMAL",
+    "PONTING", "WAUGH", "GILCHRIST", "MCGRATH", "WARNE", "HAYDEN",
+    "LARA", "AMBROSE", "WALSH", "SOBERS", "LLOYD", "GREENIDGE",
+    "MIANDAD", "IMRAN", "WAQAR", "WASIM", "INZAMAM", "YOUNIS",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA: Wordle Words (5-letter cricket/sports words)
+# ─────────────────────────────────────────────────────────────────────────────
+WORDLE_WORDS = [
+    "CATCH", "PITCH", "STUMP", "DRIVE", "SWEPT", "GLIDE", "LOFTS", "EDGED",
+    "FLICK", "GUARD", "COVER", "EXTRA", "NOTCH", "PLUMB", "QUICH", "BOWLS",
+    "SOLID", "SLASH", "PUNCH", "SIXER", "THICK", "UPPER", "LOWER", "POWER",
+    "CREAM", "BLADE", "CRAMP", "GRIND", "FLAIR", "BLAZE", "STORM", "PRIME",
+    "FRONT", "ANGLE", "BRACE", "CHAIN", "DRAFT", "ELITE", "FRAME", "GLOBE",
+    "HEART", "JOINT", "KNIFE", "LANCE", "MOUNT", "NIGHT", "ORBIT", "PEARL",
+    "QUEST", "RAISE", "SCALE", "TOAST", "ULTRA", "VAULT", "WATCH", "YIELD",
+    "GRACE", "SWIFT", "BRAVE", "SHARP", "CLEAN", "SWING", "SEAM", "ROUND",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA: Fast Fingers Sentences
+# ─────────────────────────────────────────────────────────────────────────────
+FASTTYPE_SENTENCES = [
+    "The quick brown fox jumps over the lazy dog",
+    "Cricket is the gentleman's game played with passion",
+    "Sachin Tendulkar is the God of Cricket",
+    "Six and four are the best shots in cricket",
+    "The bowler runs in and delivers a perfect yorker",
+    "India won the World Cup with a spectacular six",
+    "The wicketkeeper dives to take an incredible catch",
+    "Dhoni finishes it off in style with a helicopter shot",
+    "The umpire raises his finger and the batsman walks",
+    "Rain stops play but cricket never stops in our hearts",
+    "A hat trick is three wickets in three consecutive balls",
+    "The opening partnership set a solid foundation",
+    "Spin bowling is an art that requires patience",
+    "The new ball swings and seams in helpful conditions",
+    "Every match begins with a toss and a handshake",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA: Hot Potato Quiz Questions
+# ─────────────────────────────────────────────────────────────────────────────
+HPQUIZ_QUESTIONS = [
+    {"q": "How many players are in a cricket team?", "ans": "11"},
+    {"q": "What is the full form of IPL?", "ans": "indian premier league"},
+    {"q": "Who is known as the God of Cricket?", "ans": "sachin"},
+    {"q": "How many overs are in a T20 match per side?", "ans": "20"},
+    {"q": "What does LBW stand for?", "ans": "leg before wicket"},
+    {"q": "Which team has won the most IPL titles?", "ans": "mumbai indians"},
+    {"q": "How many runs does a boundary score?", "ans": "4"},
+    {"q": "How many runs does a six score?", "ans": "6"},
+    {"q": "What is the highest score by any batsman in ODIs?", "ans": "264"},
+    {"q": "In which year did India win its first World Cup?", "ans": "1983"},
+    {"q": "Who captained India in the 2011 World Cup?", "ans": "dhoni"},
+    {"q": "How many stumps are there in cricket?", "ans": "3"},
+    {"q": "What is a score of 0 called in cricket?", "ans": "duck"},
+    {"q": "How many balls in one over?", "ans": "6"},
+    {"q": "Which country invented cricket?", "ans": "england"},
+    {"q": "Who scored the first double century in ODI cricket?", "ans": "sachin"},
+    {"q": "What is a googly?", "ans": "off spin"},
+    {"q": "Who has taken the most wickets in Test cricket?", "ans": "murali"},
+    {"q": "What is the name of the ground called Home of Cricket?", "ans": "lords"},
+    {"q": "What happens if you hit the ball over the rope without bouncing?", "ans": "six"},
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME 1: CRICKET TRIVIA  /trivia
+# ─────────────────────────────────────────────────────────────────────────────
+
+@check_banned
+@log_command("trivia")
+async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start a cricket trivia question"""
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+
+    # Cooldown: 15 seconds
+    on_cd, secs = bot_instance.check_cooldown(user.id, "trivia", 15)
+    if on_cd:
+        await update.message.reply_text(f"⏳ Wait <b>{secs}s</b> before the next trivia!", parse_mode="HTML")
+        return
+
+    # Kill existing game in this chat
+    if chat_id in TRIVIA_GAMES:
+        TRIVIA_GAMES.pop(chat_id)
+
+    q = random.choice(TRIVIA_QUESTIONS)
+    opts = q["opts"]
+    game = {
+        "user_id": user.id,
+        "question": q["q"],
+        "opts": opts,
+        "ans": q["ans"],
+        "started_at": time.time(),
+        "answered": False,
+    }
+    TRIVIA_GAMES[chat_id] = game
+    bot_instance.update_cooldown(user.id, "trivia")
+
+    # Build keyboard
+    buttons = [
+        [InlineKeyboardButton(f"{chr(65+i)}) {opt}", callback_data=f"trivia_{chat_id}_{i}")]
+        for i, opt in enumerate(opts)
+    ]
+    buttons.append([InlineKeyboardButton("⏩ Skip", callback_data=f"trivia_{chat_id}_skip")])
+    kb = InlineKeyboardMarkup(buttons)
+
+    await update.message.reply_text(
+        f"🏏 <b>Cricket Trivia!</b>\n\n"
+        f"❓ <b>{html.escape(q['q'])}</b>\n\n"
+        f"⏰ <i>You have 30 seconds to answer!</i>",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
+    # Auto-expire after 30 seconds
+    async def expire_trivia():
+        await asyncio.sleep(30)
+        game = TRIVIA_GAMES.pop(chat_id, None)
+        if game and not game["answered"]:
+            correct = game["opts"][game["ans"]]
+            try:
+                await context.bot.send_message(
+                    chat_id,
+                    f"⏰ <b>Time's up!</b>\n\n✅ The answer was: <b>{html.escape(correct)}</b>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+    asyncio.create_task(expire_trivia())
+
+
+async def trivia_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle trivia answer button press"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data  # trivia_<chat_id>_<choice|skip>
+    parts = data.split("_")
+    if len(parts) < 3:
+        return
+
+    chat_id = int(parts[1])
+    choice = parts[2]
+    user = query.from_user
+
+    game = TRIVIA_GAMES.get(chat_id)
+    if not game:
+        await query.edit_message_text("⏰ This trivia has expired! Use /trivia for a new one.")
+        return
+    if game["answered"]:
+        await query.answer("Already answered!", show_alert=True)
+        return
+
+    game["answered"] = True
+    TRIVIA_GAMES.pop(chat_id, None)
+
+    if choice == "skip":
+        correct = game["opts"][game["ans"]]
+        await query.edit_message_text(
+            f"⏩ <b>Skipped!</b>\n\n✅ The answer was: <b>{html.escape(correct)}</b>",
+            parse_mode="HTML",
+        )
+        return
+
+    chosen = int(choice)
+    correct_idx = game["ans"]
+    correct_text = game["opts"][correct_idx]
+
+    if chosen == correct_idx:
+        shards = random.randint(3, 8)
+        bot_instance.award_shards(user.id, shards, "trivia", f"Correct trivia answer")
+        await query.edit_message_text(
+            f"✅ <b>Correct! Well done, {html.escape(user.first_name)}!</b>\n\n"
+            f"🏆 Answer: <b>{html.escape(correct_text)}</b>\n"
+            f"💎 +{shards} shards earned!\n\n"
+            f"🎯 Use /trivia for another question!",
+            parse_mode="HTML",
+        )
+    else:
+        chosen_text = game["opts"][chosen]
+        await query.edit_message_text(
+            f"❌ <b>Wrong, {html.escape(user.first_name)}!</b>\n\n"
+            f"Your answer: <i>{html.escape(chosen_text)}</i>\n"
+            f"✅ Correct: <b>{html.escape(correct_text)}</b>\n\n"
+            f"📚 Better luck next time! /trivia",
+            parse_mode="HTML",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME 2: EMOJI CRICKET  /emojiguess
+# ─────────────────────────────────────────────────────────────────────────────
+
+@check_banned
+@log_command("emojiguess")
+async def emojiguess_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Guess the cricket team from emojis"""
+    user = update.effective_user
+
+    on_cd, secs = bot_instance.check_cooldown(user.id, "emojiguess", 20)
+    if on_cd:
+        await update.message.reply_text(f"⏳ Wait <b>{secs}s</b> before next emoji guess!", parse_mode="HTML")
+        return
+
+    if user.id in EMOJI_GAMES:
+        EMOJI_GAMES.pop(user.id)
+
+    team = random.choice(EMOJI_TEAMS)
+    EMOJI_GAMES[user.id] = {
+        "team": team,
+        "attempts": 0,
+        "max_attempts": 3,
+        "started_at": time.time(),
+        "active": True,
+    }
+    bot_instance.update_cooldown(user.id, "emojiguess")
+
+    await update.message.reply_text(
+        f"🏏 <b>Emoji Cricket!</b>\n\n"
+        f"🎯 Which cricket team do these emojis represent?\n\n"
+        f"<b>{team['emojis']}</b>\n\n"
+        f"💡 Type your answer! (3 attempts)\n"
+        f"❌ Type /quitgame to give up",
+        parse_mode="HTML",
+    )
+
+    async def expire_emoji():
+        await asyncio.sleep(60)
+        game = EMOJI_GAMES.pop(user.id, None)
+        if game and game["active"]:
+            try:
+                await context.bot.send_message(
+                    update.effective_chat.id,
+                    f"⏰ <b>Time's up!</b>\n✅ The answer was: <b>{html.escape(team['answer'])}</b>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+    asyncio.create_task(expire_emoji())
+
+
+async def handle_emojiguess_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Process emoji guess text input"""
+    user = update.effective_user
+    if user.id not in EMOJI_GAMES:
+        return
+
+    game = EMOJI_GAMES[user.id]
+    if not game["active"]:
+        return
+
+    text = update.message.text.strip().lower()
+    team = game["team"]
+    aliases = team["aliases"]
+
+    if any(alias in text for alias in aliases):
+        game["active"] = False
+        EMOJI_GAMES.pop(user.id, None)
+        shards = random.randint(5, 12)
+        bot_instance.award_shards(user.id, shards, "emojiguess", f"Guessed: {team['answer']}")
+        await update.message.reply_text(
+            f"🎉 <b>Correct! {html.escape(user.first_name)} got it!</b>\n\n"
+            f"{team['emojis']} = <b>{html.escape(team['answer'])}</b>\n"
+            f"💎 +{shards} shards earned!\n\n"
+            f"🏏 Play again: /emojiguess",
+            parse_mode="HTML",
+        )
+    else:
+        game["attempts"] += 1
+        if game["attempts"] >= game["max_attempts"]:
+            game["active"] = False
+            EMOJI_GAMES.pop(user.id, None)
+            await update.message.reply_text(
+                f"❌ <b>Out of attempts!</b>\n\n"
+                f"{team['emojis']} = <b>{html.escape(team['answer'])}</b>\n\n"
+                f"🏏 Try again: /emojiguess",
+                parse_mode="HTML",
+            )
+        else:
+            remaining = game["max_attempts"] - game["attempts"]
+            await update.message.reply_text(
+                f"❌ Wrong! <b>{remaining} attempt(s)</b> remaining.\n"
+                f"💡 Keep trying! The emojis: <b>{team['emojis']}</b>",
+                parse_mode="HTML",
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME 3: PLAYER NAME SCRAMBLE  /scramble
+# ─────────────────────────────────────────────────────────────────────────────
+
+@check_banned
+@log_command("scramble")
+async def scramble_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Unscramble the cricketer's name"""
+    user = update.effective_user
+
+    on_cd, secs = bot_instance.check_cooldown(user.id, "scramble", 20)
+    if on_cd:
+        await update.message.reply_text(f"⏳ Wait <b>{secs}s</b>!", parse_mode="HTML")
+        return
+
+    if user.id in SCRAMBLE_GAMES:
+        SCRAMBLE_GAMES.pop(user.id)
+
+    name = random.choice(CRICKETERS)
+    # Scramble: shuffle letters, ensure different from original
+    letters = list(name)
+    for _ in range(10):
+        random.shuffle(letters)
+        if ''.join(letters) != name:
+            break
+    scrambled = ''.join(letters)
+
+    SCRAMBLE_GAMES[user.id] = {
+        "name": name,
+        "scrambled": scrambled,
+        "attempts": 0,
+        "max_attempts": 4,
+        "active": True,
+        "started_at": time.time(),
+    }
+    bot_instance.update_cooldown(user.id, "scramble")
+
+    await update.message.reply_text(
+        f"🔤 <b>Player Name Scramble!</b>\n\n"
+        f"Unscramble this cricketer's name:\n\n"
+        f"<code>{scrambled}</code>\n\n"
+        f"💡 <i>{len(name)} letters</i> | 4 attempts\n"
+        f"Type your answer or /quitgame to give up!",
+        parse_mode="HTML",
+    )
+
+    async def expire_scramble():
+        await asyncio.sleep(90)
+        game = SCRAMBLE_GAMES.pop(user.id, None)
+        if game and game["active"]:
+            try:
+                await context.bot.send_message(
+                    update.effective_chat.id,
+                    f"⏰ <b>Time's up!</b>\n✅ The answer was: <b>{html.escape(game['name'])}</b>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+    asyncio.create_task(expire_scramble())
+
+
+async def handle_scramble_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Process scramble text input"""
+    user = update.effective_user
+    if user.id not in SCRAMBLE_GAMES:
+        return
+
+    game = SCRAMBLE_GAMES[user.id]
+    if not game["active"]:
+        return
+
+    guess = update.message.text.strip().upper()
+    if guess == game["name"]:
+        game["active"] = False
+        SCRAMBLE_GAMES.pop(user.id, None)
+        shards = random.randint(5, 10)
+        bot_instance.award_shards(user.id, shards, "scramble", f"Unscrambled: {game['name']}")
+        await update.message.reply_text(
+            f"🎉 <b>Correct! {html.escape(user.first_name)}!</b>\n\n"
+            f"<code>{game['scrambled']}</code> → <b>{html.escape(game['name'])}</b>\n"
+            f"💎 +{shards} shards earned!\n\n"
+            f"🔤 Play again: /scramble",
+            parse_mode="HTML",
+        )
+    else:
+        game["attempts"] += 1
+        if game["attempts"] >= game["max_attempts"]:
+            game["active"] = False
+            SCRAMBLE_GAMES.pop(user.id, None)
+            await update.message.reply_text(
+                f"❌ <b>Out of attempts!</b>\n\n"
+                f"<code>{game['scrambled']}</code> → <b>{html.escape(game['name'])}</b>\n\n"
+                f"🔤 Try again: /scramble",
+                parse_mode="HTML",
+            )
+        else:
+            remaining = game["max_attempts"] - game["attempts"]
+            await update.message.reply_text(
+                f"❌ Not quite! <b>{remaining}</b> attempt(s) left.\n"
+                f"Scrambled: <code>{game['scrambled']}</code>",
+                parse_mode="HTML",
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME 4: HANGMAN  /hangman
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hangman_display(name: str, guessed: set) -> str:
+    return ' '.join(c if c in guessed else '_' for c in name)
+
+def _hangman_art(wrong: int) -> str:
+    stages = [
+        "```\n  +---+\n  |   |\n      |\n      |\n      |\n      |\n=========```",
+        "```\n  +---+\n  |   |\n  O   |\n      |\n      |\n      |\n=========```",
+        "```\n  +---+\n  |   |\n  O   |\n  |   |\n      |\n      |\n=========```",
+        "```\n  +---+\n  |   |\n  O   |\n /|   |\n      |\n      |\n=========```",
+        "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n      |\n      |\n=========```",
+        "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n /    |\n      |\n=========```",
+        "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n / \\  |\n      |\n=========```",
+    ]
+    return stages[min(wrong, 6)]
+
+@check_banned
+@log_command("hangman")
+async def hangman_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Play Hangman with cricket player names"""
+    user = update.effective_user
+
+    on_cd, secs = bot_instance.check_cooldown(user.id, "hangman", 30)
+    if on_cd:
+        await update.message.reply_text(f"⏳ Wait <b>{secs}s</b>!", parse_mode="HTML")
+        return
+
+    if user.id in HANGMAN_GAMES:
+        HANGMAN_GAMES.pop(user.id)
+
+    name = random.choice(CRICKETERS)
+    HANGMAN_GAMES[user.id] = {
+        "name": name,
+        "guessed": set(),
+        "wrong": 0,
+        "max_wrong": 6,
+        "active": True,
+        "chat_id": update.effective_chat.id,
+    }
+    bot_instance.update_cooldown(user.id, "hangman")
+
+    display = _hangman_display(name, set())
+    art = _hangman_art(0)
+    await update.message.reply_text(
+        f"🪡 <b>Hangman — Cricket Edition!</b>\n\n"
+        f"{art}\n\n"
+        f"<code>{display}</code> <i>({len(name)} letters)</i>\n\n"
+        f"Type a <b>single letter</b> to guess!\n"
+        f"6 wrong guesses = game over. /quitgame to quit.",
+        parse_mode="HTML",
+    )
+
+
+async def handle_hangman_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Process hangman letter guesses"""
+    user = update.effective_user
+    if user.id not in HANGMAN_GAMES:
+        return
+
+    game = HANGMAN_GAMES[user.id]
+    if not game["active"]:
+        return
+
+    text = update.message.text.strip().upper()
+    if len(text) != 1 or not text.isalpha():
+        return  # Ignore multi-letter or non-alpha inputs
+
+    letter = text
+    name = game["name"]
+    guessed = game["guessed"]
+
+    if letter in guessed:
+        await update.message.reply_text(f"⚠️ You already guessed <b>{letter}</b>!", parse_mode="HTML")
+        return
+
+    guessed.add(letter)
+    display = _hangman_display(name, guessed)
+
+    if letter in name:
+        # Check win
+        if '_' not in display:
+            game["active"] = False
+            HANGMAN_GAMES.pop(user.id, None)
+            shards = random.randint(8, 15)
+            bot_instance.award_shards(user.id, shards, "hangman", f"Solved: {name}")
+            await update.message.reply_text(
+                f"🎉 <b>You saved him! Correct!</b>\n\n"
+                f"✅ The player was: <b>{html.escape(name)}</b>\n"
+                f"💎 +{shards} shards earned!\n\n"
+                f"🪡 Play again: /hangman",
+                parse_mode="HTML",
+            )
+        else:
+            art = _hangman_art(game["wrong"])
+            await update.message.reply_text(
+                f"✅ <b>{letter}</b> is in the name!\n\n"
+                f"{art}\n\n"
+                f"<code>{display}</code>\n"
+                f"Guessed: {' '.join(sorted(guessed))}",
+                parse_mode="HTML",
+            )
+    else:
+        game["wrong"] += 1
+        art = _hangman_art(game["wrong"])
+        if game["wrong"] >= game["max_wrong"]:
+            game["active"] = False
+            HANGMAN_GAMES.pop(user.id, None)
+            await update.message.reply_text(
+                f"💀 <b>Game Over!</b>\n\n"
+                f"{art}\n\n"
+                f"The player was: <b>{html.escape(name)}</b>\n\n"
+                f"🪡 Try again: /hangman",
+                parse_mode="HTML",
+            )
+        else:
+            remaining = game["max_wrong"] - game["wrong"]
+            await update.message.reply_text(
+                f"❌ <b>{letter}</b> is not in the name! {remaining} lives left.\n\n"
+                f"{art}\n\n"
+                f"<code>{display}</code>\n"
+                f"Guessed: {' '.join(sorted(guessed))}",
+                parse_mode="HTML",
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME 5: WORDLE  /wordle
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _wordle_feedback(guess: str, target: str) -> str:
+    """Return emoji feedback row for a Wordle guess"""
+    result = []
+    target_list = list(target)
+    guess_list = list(guess)
+    marks = ['⬜'] * 5
+
+    # First pass: greens
+    for i in range(5):
+        if guess_list[i] == target_list[i]:
+            marks[i] = '🟩'
+            target_list[i] = None
+            guess_list[i] = None
+
+    # Second pass: yellows
+    for i in range(5):
+        if guess_list[i] is None:
+            continue
+        if guess_list[i] in target_list:
+            marks[i] = '🟨'
+            target_list[target_list.index(guess_list[i])] = None
+
+    return ' '.join(marks)
+
+
+def _wordle_board(attempts: list) -> str:
+    lines = []
+    for guess, feedback in attempts:
+        lines.append(f"{feedback}  <code>{guess}</code>")
+    return '\n'.join(lines) if lines else '(No guesses yet)'
+
+
+@check_banned
+@log_command("wordle")
+async def wordle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Play 5-letter Wordle"""
+    user = update.effective_user
+
+    on_cd, secs = bot_instance.check_cooldown(user.id, "wordle", 30)
+    if on_cd:
+        await update.message.reply_text(f"⏳ Wait <b>{secs}s</b>!", parse_mode="HTML")
+        return
+
+    if user.id in WORDLE_GAMES:
+        WORDLE_GAMES.pop(user.id)
+
+    word = random.choice(WORDLE_WORDS)
+    WORDLE_GAMES[user.id] = {
+        "word": word,
+        "attempts": [],
+        "max_attempts": 6,
+        "active": True,
+        "chat_id": update.effective_chat.id,
+    }
+    bot_instance.update_cooldown(user.id, "wordle")
+
+    await update.message.reply_text(
+        f"🟩 <b>WORDLE — Cricket Edition!</b>\n\n"
+        f"Guess the <b>5-letter word</b> in 6 tries!\n\n"
+        f"🟩 = Correct letter, correct position\n"
+        f"🟨 = Correct letter, wrong position\n"
+        f"⬜ = Letter not in the word\n\n"
+        f"Type any 5-letter word to start!\n"
+        f"/quitgame to give up.",
+        parse_mode="HTML",
+    )
+
+
+async def handle_wordle_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Process Wordle word guesses"""
+    user = update.effective_user
+    if user.id not in WORDLE_GAMES:
+        return
+
+    game = WORDLE_GAMES[user.id]
+    if not game["active"]:
+        return
+
+    guess = update.message.text.strip().upper()
+    if len(guess) != 5 or not guess.isalpha():
+        await update.message.reply_text("⚠️ Please type a valid <b>5-letter word</b>!", parse_mode="HTML")
+        return
+
+    target = game["word"]
+    feedback = _wordle_feedback(guess, target)
+    game["attempts"].append((guess, feedback))
+
+    board = _wordle_board(game["attempts"])
+    attempts_used = len(game["attempts"])
+
+    if guess == target:
+        game["active"] = False
+        WORDLE_GAMES.pop(user.id, None)
+        shards = max(5, (game["max_attempts"] - attempts_used + 1) * 5)
+        bot_instance.award_shards(user.id, shards, "wordle", f"Solved in {attempts_used} tries")
+        await update.message.reply_text(
+            f"🎉 <b>WORDLE SOLVED!</b>\n\n"
+            f"{board}\n\n"
+            f"✅ The word was: <b>{html.escape(target)}</b>\n"
+            f"Solved in <b>{attempts_used}/{game['max_attempts']}</b> tries!\n"
+            f"💎 +{shards} shards earned!\n\n"
+            f"🟩 Play again: /wordle",
+            parse_mode="HTML",
+        )
+    elif attempts_used >= game["max_attempts"]:
+        game["active"] = False
+        WORDLE_GAMES.pop(user.id, None)
+        await update.message.reply_text(
+            f"❌ <b>Out of tries!</b>\n\n"
+            f"{board}\n\n"
+            f"The word was: <b>{html.escape(target)}</b>\n\n"
+            f"🟩 Try again: /wordle",
+            parse_mode="HTML",
+        )
+    else:
+        remaining = game["max_attempts"] - attempts_used
+        await update.message.reply_text(
+            f"🟩 <b>Wordle</b> — {remaining} tries left\n\n"
+            f"{board}\n\n"
+            f"Keep guessing!",
+            parse_mode="HTML",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME 6: FAST FINGERS  /fasttype  (Group game)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@check_banned
+@log_command("fasttype")
+async def fasttype_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fast typing race — first to type the sentence wins (group game)"""
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+
+    on_cd, secs = bot_instance.check_cooldown(user.id, "fasttype", 60)
+    if on_cd:
+        await update.message.reply_text(f"⏳ Wait <b>{secs}s</b> before starting a typing race!", parse_mode="HTML")
+        return
+
+    if chat_id in FASTTYPE_GAMES and FASTTYPE_GAMES[chat_id]["active"]:
+        await update.message.reply_text("⚠️ A typing race is already in progress in this chat!")
+        return
+
+    sentence = random.choice(FASTTYPE_SENTENCES)
+    FASTTYPE_GAMES[chat_id] = {
+        "sentence": sentence,
+        "started_by": user.id,
+        "started_at": None,
+        "active": False,
+        "winner": None,
+    }
+    bot_instance.update_cooldown(user.id, "fasttype")
+
+    await update.message.reply_text(
+        f"⌨️ <b>FAST FINGERS!</b>\n\n"
+        f"Get ready! The sentence will appear in <b>3 seconds</b>...\n\n"
+        f"🏆 First to type it exactly wins <b>10-20 shards!</b>",
+        parse_mode="HTML",
+    )
+
+    await asyncio.sleep(3)
+
+    game = FASTTYPE_GAMES.get(chat_id)
+    if not game:
+        return
+
+    game["active"] = True
+    game["started_at"] = time.time()
+
+    await context.bot.send_message(
+        chat_id,
+        f"⌨️ <b>TYPE THIS NOW!</b>\n\n"
+        f"<code>{html.escape(sentence)}</code>\n\n"
+        f"⏰ <i>60 seconds to type it exactly!</i>",
+        parse_mode="HTML",
+    )
+
+    async def expire_fasttype():
+        await asyncio.sleep(60)
+        game = FASTTYPE_GAMES.pop(chat_id, None)
+        if game and game["active"] and not game["winner"]:
+            try:
+                await context.bot.send_message(
+                    chat_id,
+                    f"⏰ <b>Time's up!</b> Nobody typed it fast enough.\n"
+                    f"The sentence was: <code>{html.escape(sentence)}</code>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+    asyncio.create_task(expire_fasttype())
+
+
+async def handle_fasttype_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check if user typed the sentence correctly"""
+    chat_id = update.effective_chat.id
+    if chat_id not in FASTTYPE_GAMES:
+        return
+
+    game = FASTTYPE_GAMES[chat_id]
+    if not game["active"] or game["winner"]:
+        return
+
+    user = update.effective_user
+    text = update.message.text.strip()
+    sentence = game["sentence"]
+
+    if text.lower() == sentence.lower():
+        game["winner"] = user.id
+        game["active"] = False
+        elapsed = round(time.time() - game["started_at"], 2)
+        FASTTYPE_GAMES.pop(chat_id, None)
+
+        shards = random.randint(10, 20)
+        bot_instance.award_shards(user.id, shards, "fasttype", f"Won typing race in {elapsed}s")
+
+        await update.message.reply_text(
+            f"⚡ <b>{html.escape(user.first_name)} WINS!</b>\n\n"
+            f"⏱️ Typed in <b>{elapsed} seconds</b>\n"
+            f"💎 +{shards} shards earned!\n\n"
+            f"⌨️ Start another race: /fasttype",
+            parse_mode="HTML",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME 7: HOT POTATO QUIZ  /hpquiz  (Group elimination game)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@check_banned
+@log_command("hpquiz")
+async def hpquiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hot Potato Quiz — group elimination trivia game"""
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+
+    on_cd, secs = bot_instance.check_cooldown(user.id, "hpquiz", 120)
+    if on_cd:
+        await update.message.reply_text(f"⏳ Wait <b>{secs}s</b> before starting a new quiz!", parse_mode="HTML")
+        return
+
+    if chat_id in HPQUIZ_GAMES and HPQUIZ_GAMES[chat_id].get("active"):
+        await update.message.reply_text("⚠️ A Hot Potato Quiz is already running! Wait for it to finish.")
+        return
+
+    bot_instance.update_cooldown(user.id, "hpquiz")
+
+    questions = random.sample(HPQUIZ_QUESTIONS, min(5, len(HPQUIZ_QUESTIONS)))
+    HPQUIZ_GAMES[chat_id] = {
+        "active": True,
+        "questions": questions,
+        "current_q": 0,
+        "players": {},    # user_id -> {name, score, eliminated}
+        "answered_this_round": set(),
+        "started_by": user.id,
+        "round_active": False,
+    }
+
+    await context.bot.send_message(
+        chat_id,
+        f"🔥 <b>HOT POTATO QUIZ!</b>\n\n"
+        f"5 cricket questions, 15 seconds each!\n"
+        f"❌ Wrong answer = eliminated!\n"
+        f"🏆 Last person standing wins <b>25 shards!</b>\n\n"
+        f"Anyone who types in the next 10 seconds joins automatically!\n"
+        f"⏳ Game starts in <b>10 seconds...</b>",
+        parse_mode="HTML",
+    )
+
+    # Wait for players to join via any message
+    await asyncio.sleep(10)
+
+    game = HPQUIZ_GAMES.get(chat_id)
+    if not game or not game["active"]:
+        return
+
+    if not game["players"]:
+        HPQUIZ_GAMES.pop(chat_id, None)
+        await context.bot.send_message(chat_id, "😔 No players joined! Use /hpquiz to start again.", parse_mode="HTML")
+        return
+
+    player_list = '\n'.join([f"  • {p['name']}" for p in game["players"].values()])
+    await context.bot.send_message(
+        chat_id,
+        f"🔥 <b>Quiz Starting!</b>\n\n"
+        f"👥 <b>Players:</b>\n{player_list}\n\n"
+        f"Get ready for Question 1!",
+        parse_mode="HTML",
+    )
+
+    await asyncio.sleep(3)
+    await _run_hpquiz_round(chat_id, context)
+
+
+async def _run_hpquiz_round(chat_id: int, context) -> None:
+    """Run a single question round of Hot Potato Quiz"""
+    game = HPQUIZ_GAMES.get(chat_id)
+    if not game or not game["active"]:
+        return
+
+    active_players = {uid: p for uid, p in game["players"].items() if not p["eliminated"]}
+    if len(active_players) <= 1:
+        await _end_hpquiz(chat_id, context)
+        return
+
+    q_idx = game["current_q"]
+    if q_idx >= len(game["questions"]):
+        await _end_hpquiz(chat_id, context)
+        return
+
+    q = game["questions"][q_idx]
+    game["answered_this_round"] = set()
+    game["round_active"] = True
+    game["current_answer"] = q["ans"]
+    game["round_wrong"] = set()
+
+    await context.bot.send_message(
+        chat_id,
+        f"🔥 <b>Question {q_idx + 1}/5</b>\n\n"
+        f"❓ <b>{html.escape(q['q'])}</b>\n\n"
+        f"⏰ <i>15 seconds! Type your answer!</i>\n"
+        f"Active players: {len(active_players)}",
+        parse_mode="HTML",
+    )
+
+    await asyncio.sleep(15)
+
+    # Eliminate non-answerers and wrong answerers
+    game["round_active"] = False
+    game["current_q"] += 1
+
+    eliminated_this_round = []
+    for uid, player in active_players.items():
+        if uid not in game["answered_this_round"] or uid in game.get("round_wrong", set()):
+            player["eliminated"] = True
+            eliminated_this_round.append(player["name"])
+
+    if eliminated_this_round:
+        elim_text = ', '.join([html.escape(n) for n in eliminated_this_round])
+        await context.bot.send_message(
+            chat_id,
+            f"💀 <b>Eliminated:</b> {elim_text}\n"
+            f"✅ Answer was: <b>{html.escape(q['ans'])}</b>",
+            parse_mode="HTML",
+        )
+    else:
+        await context.bot.send_message(
+            chat_id,
+            f"✅ Everyone answered correctly!\n"
+            f"Answer: <b>{html.escape(q['ans'])}</b>",
+            parse_mode="HTML",
+        )
+
+    await asyncio.sleep(3)
+    await _run_hpquiz_round(chat_id, context)
+
+
+async def _end_hpquiz(chat_id: int, context) -> None:
+    """End Hot Potato Quiz and announce winner"""
+    game = HPQUIZ_GAMES.pop(chat_id, None)
+    if not game:
+        return
+
+    survivors = [(uid, p) for uid, p in game["players"].items() if not p["eliminated"]]
+
+    if survivors:
+        winner_id, winner = survivors[0]
+        shards = 25
+        bot_instance.award_shards(winner_id, shards, "hpquiz", "Won Hot Potato Quiz")
+        await context.bot.send_message(
+            chat_id,
+            f"🏆 <b>HOT POTATO QUIZ OVER!</b>\n\n"
+            f"🥇 Winner: <b>{html.escape(winner['name'])}</b>\n"
+            f"💎 +{shards} shards awarded!\n\n"
+            f"🔥 Play again: /hpquiz",
+            parse_mode="HTML",
+        )
+    else:
+        await context.bot.send_message(
+            chat_id,
+            f"🔥 <b>HOT POTATO QUIZ OVER!</b>\n\n"
+            f"😵 Everyone was eliminated! No winner this time.\n"
+            f"🔥 Play again: /hpquiz",
+            parse_mode="HTML",
+        )
+
+
+async def handle_hpquiz_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle Hot Potato Quiz text input — joining & answering"""
+    chat_id = update.effective_chat.id
+    if chat_id not in HPQUIZ_GAMES:
+        return
+
+    game = HPQUIZ_GAMES[chat_id]
+    if not game["active"]:
+        return
+
+    user = update.effective_user
+    uid = user.id
+    text = update.message.text.strip().lower()
+
+    # Join phase: register player if not already in
+    if uid not in game["players"]:
+        game["players"][uid] = {
+            "name": user.full_name or user.first_name,
+            "eliminated": False,
+        }
+        await update.message.reply_text(
+            f"✋ <b>{html.escape(user.first_name)}</b> joined the quiz!",
+            parse_mode="HTML",
+        )
+        return
+
+    # Answer phase
+    if not game.get("round_active"):
+        return
+
+    player = game["players"].get(uid)
+    if not player or player["eliminated"]:
+        return
+    if uid in game["answered_this_round"]:
+        return
+
+    game["answered_this_round"].add(uid)
+    correct_ans = game.get("current_answer", "").lower()
+
+    if correct_ans in text or text in correct_ans:
+        await update.message.reply_text(f"✅ <b>{html.escape(user.first_name)}</b> answered correctly!", parse_mode="HTML")
+    else:
+        if "round_wrong" not in game:
+            game["round_wrong"] = set()
+        game["round_wrong"].add(uid)
+        await update.message.reply_text(f"❌ <b>{html.escape(user.first_name)}</b> — wrong answer!", parse_mode="HTML")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QUIT GAME COMMAND  /quitgame
+# ─────────────────────────────────────────────────────────────────────────────
+
+@check_banned
+@log_command("quitgame")
+async def quitgame_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Quit any active mini game"""
+    user = update.effective_user
+    uid = user.id
+    quit_any = False
+    messages = []
+
+    if uid in EMOJI_GAMES:
+        game = EMOJI_GAMES.pop(uid)
+        messages.append(f"Emoji Cricket — Answer: <b>{html.escape(game['team']['answer'])}</b>")
+        quit_any = True
+    if uid in SCRAMBLE_GAMES:
+        game = SCRAMBLE_GAMES.pop(uid)
+        messages.append(f"Scramble — Answer: <b>{html.escape(game['name'])}</b>")
+        quit_any = True
+    if uid in HANGMAN_GAMES:
+        game = HANGMAN_GAMES.pop(uid)
+        messages.append(f"Hangman — Answer: <b>{html.escape(game['name'])}</b>")
+        quit_any = True
+    if uid in WORDLE_GAMES:
+        game = WORDLE_GAMES.pop(uid)
+        messages.append(f"Wordle — Answer: <b>{html.escape(game['word'])}</b>")
+        quit_any = True
+
+    if quit_any:
+        reveal = '\n'.join(messages)
+        await update.message.reply_text(
+            f"🚪 <b>Game(s) quit!</b>\n\n{reveal}\n\n"
+            f"Start a new game anytime!",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            "ℹ️ You have no active mini games to quit.\n\n"
+            "Start one: /trivia /emojiguess /scramble /hangman /wordle",
+            parse_mode="HTML",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MINI GAMES INPUT ROUTER  (called from message handler)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def handle_minigame_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Route text input to the correct active mini game for this user/chat"""
+    if not update.message or not update.message.text:
+        return
+    if update.message.text.startswith('/'):
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    uid = user.id
+    chat_id = update.effective_chat.id
+
+    # Per-user games (check user ID)
+    if uid in EMOJI_GAMES and EMOJI_GAMES[uid].get("active"):
+        await handle_emojiguess_input(update, context)
+        return
+
+    if uid in SCRAMBLE_GAMES and SCRAMBLE_GAMES[uid].get("active"):
+        await handle_scramble_input(update, context)
+        return
+
+    if uid in HANGMAN_GAMES and HANGMAN_GAMES[uid].get("active"):
+        await handle_hangman_input(update, context)
+        return
+
+    if uid in WORDLE_GAMES and WORDLE_GAMES[uid].get("active"):
+        await handle_wordle_input(update, context)
+        return
+
+    # Per-chat games (check chat ID)
+    if chat_id in FASTTYPE_GAMES and FASTTYPE_GAMES[chat_id].get("active"):
+        await handle_fasttype_input(update, context)
+        return
+
+    if chat_id in HPQUIZ_GAMES and HPQUIZ_GAMES[chat_id].get("active"):
+        await handle_hpquiz_input(update, context)
+        return
+
+
 # Command Registration
+
 def register_commands(application):
     """Register all bot commands"""
     
@@ -18993,6 +20138,18 @@ def register_commands(application):
     application.add_handler(CommandHandler("dailyguess", daily_guess_command))
     application.add_handler(CommandHandler("goat", goat_command))
     application.add_handler(CommandHandler("myroast", my_roast_command))
+
+    # ====================================
+    # MINI GAME COMMANDS
+    # ====================================
+    application.add_handler(CommandHandler("trivia", trivia_command))
+    application.add_handler(CommandHandler("emojiguess", emojiguess_command))
+    application.add_handler(CommandHandler("scramble", scramble_command))
+    application.add_handler(CommandHandler("hangman", hangman_command))
+    application.add_handler(CommandHandler("wordle", wordle_command))
+    application.add_handler(CommandHandler("fasttype", fasttype_command))
+    application.add_handler(CommandHandler("hpquiz", hpquiz_command))
+    application.add_handler(CommandHandler("quitgame", quitgame_command))
     
     # ====================================
     # ADMIN COMMANDS
@@ -19049,6 +20206,7 @@ def register_commands(application):
     application.add_handler(CallbackQueryHandler(chase_callback, pattern="^chase:"))
     application.add_handler(CallbackQueryHandler(broadcast_callback, pattern="^broadcast_"))
     application.add_handler(CallbackQueryHandler(guess_callback, pattern="^guess_"))
+    application.add_handler(CallbackQueryHandler(trivia_callback, pattern="^trivia_"))
     application.add_handler(CallbackQueryHandler(auction_callback_router, pattern="^(approve_auction_|reject_auction_|host_|approve_player_|reject_player_|approve_captain_|reject_captain_|confirm_sale_|continue_bid_|start_bidding_|fjoin_)"))
 
     
@@ -19065,6 +20223,9 @@ def register_commands(application):
     
     # Handle number guesses for games
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_guess_input), group=3)
+
+    # Handle mini game text inputs (emoji guess, scramble, hangman, wordle, fasttype, hpquiz)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_minigame_input), group=4)
     
     # ====================================
     # ERROR HANDLER

@@ -1,0 +1,5 @@
+6d79041 fix: update keep-alive pinger URL to point to correct Render app URL
+76072e2 feat: align commands and help callbacks, fix cricket auction bid resets, and integrate /out command
+393428c Fix: Auction bidding system - Replace asyncio.Lock with threading.Lock
+6daf36d Delete oldbot.py
+737f6ed Delete auction_data.json

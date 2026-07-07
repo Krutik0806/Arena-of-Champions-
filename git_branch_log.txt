@@ -1,0 +1,1244 @@
+BRANCHES:
+* main
+  remotes/origin/HEAD -> origin/main
+  remotes/origin/main
+
+
+RECENT DIFFS:
+commit 6d79041b04db98da3ede984603c3fef3f74fb146
+Author: krutik0806 <chamthakrutik4@gmail.com>
+Date:   Fri May 22 10:38:03 2026 +0530
+
+    fix: update keep-alive pinger URL to point to correct Render app URL
+
+diff --git a/web.py b/web.py
+index e1dbede..69fdb58 100644
+--- a/web.py
++++ b/web.py
+@@ -1,4 +1,5 @@
+-WEB_URL = "https://arena-of-champions-1.onrender.com/"  # Your Render URL
++import os
++WEB_URL = os.getenv("WEB_URL", "https://arena-of-champions.onrender.com/")  # Your Render URL
+ WEB_SLEEP = 3 * 60  # Ping every 3 minutes
+ 
+ from aiohttp import web
+
+commit 76072e208fee62ecc1d085e9b85da5f522929132
+Author: krutik0806 <chamthakrutik4@gmail.com>
+Date:   Fri May 22 09:41:41 2026 +0530
+
+    feat: align commands and help callbacks, fix cricket auction bid resets, and integrate /out command
+
+diff --git a/bot.py b/bot.py
+index f6dc985..d02636f 100644
+--- a/bot.py
++++ b/bot.py
+@@ -1,4 +1,4 @@
+-﻿import os
++import os
+ import logging
+ import json
+ import math
+@@ -675,102 +675,17 @@ from dotenv import load_dotenv
+ load_dotenv()
+ 
+ # ================================
+-# ADMIN LOGGING CONFIGURATION
++# ADMIN LOGGING (DISABLED)
+ # ================================
+-ADMIN_LOG_BOT_TOKEN = os.getenv('ADMIN_LOG_BOT_TOKEN', '')
+-ADMIN_LOG_CHAT_ID = os.getenv('ADMIN_LOG_CHAT_ID', '')
+ 
+-# ================================
+-# ADMIN LOGGING FUNCTIONS
+-# ================================
++async def send_admin_log(*args, **kwargs):
++    """Admin logging disabled."""
++    pass
+ 
+-async def send_admin_log(message: str, log_type: str = "info", chat_context: str = "Unknown"):
+-    """
+-    Send log message to admin log chat using separate logging bot.
+-    
+-    Args:
+-        message: The log message to send
+-        log_type: Type of log (info, command, error, match, db_error, success, warning, game, user, admin)
+-        chat_context: Where the action occurred (DM or Group name with ID)
+-    
+-    Usage:
+-        await send_admin_log("User banned", log_type="success", chat_context="DM")
+-        await send_admin_log("CMD: /ban by Admin", log_type="command", chat_context="GC: Main Chat")
+-    """
+-    # Skip if logging is not configured
+-    if not ADMIN_LOG_BOT_TOKEN or not ADMIN_LOG_CHAT_ID:
+-        logger.warning("Admin logging not configured - skipping log")
+-        return
+-    
+-    try:
+-        # Emoji mapping for different log types
+-        emoji_map = {
+-            "info": "ℹ️",
+-            "command": "⚡",
+-            "error": "❌",
+-            "match": "🏏",
+-            "game": "🎮",
+-            "db_error": "🔴",
+-            "success": "✅",
+-            "warning": "⚠️",
+-            "user": "👤",
+-            "admin": "👑",
+-            "auction": "🎪",
+-            "economy": "💎",
+-            "system_event": "⚙️",
+-            "nightmare_win": "👑"
+-        }
+-        
+-        emoji = emoji_map.get(log_type, "📝")
+-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+-        
+-        # Add bot identifier to distinguish between bots
+-        bot_name = "🎮 Arena of Champions"
+-        
+-        # Format the log message
+-        log_message = (
+-            f"{emoji} <b>{log_type.upper()}</b> | {bot_name}\n"
+-            f"⏰ {timestamp}\n"
+-            f"📍 Context: {chat_context}\n"
+-            f"━━━━━━━━━━━━━━━━\n"
+-            f"{message}"
+-        )
+-        
+-        # Use aiohttp for direct API call (more reliable than Bot instance)
+-        import aiohttp
+-        url = f"https://api.telegram.org/bot{ADMIN_LOG_BOT_TOKEN}/sendMessage"
+-        data = {
+-            'chat_id': ADMIN_LOG_CHAT_ID,
+-            'text': log_message,
+-            'parse_mode': 'HTML'
+-        }
+-        
+-        async with aiohttp.ClientSession() as session:
+-            async with session.post(url, json=data) as response:
+-                if response.status != 200:
+-                    error_text = await response.text()
+-                    logger.error(f"Failed to send admin log. Status: {response.status}, Response: {error_text}")
+-                else:
+-                    logger.debug(f"Admin log sent successfully: {log_type}")
+-        
+-    except Exception as e:
+-        # Log to console but don't break main bot if logging fails
+-        logger.error(f"Admin log error: {type(e).__name__}: {e}", exc_info=True)
+-
+-
+-def get_chat_context(update: Update) -> str:
++def get_chat_context(update) -> str:
+     """
+     Get formatted chat context showing where a command was used.
+-    
+-    Args:
+-        update: The Telegram update object
+-    
+-    Returns:
+-        Formatted string like "DM" or "GC: GroupName (ID: -1001234567890)"
+-    
+-    Usage:
+-        chat_ctx = get_chat_context(update)
+-        await send_admin_log("Command used", chat_context=chat_ctx)
++    Returns 'DM' or 'GC: GroupName (ID: ...)'
+     """
+     try:
+         if update.effective_chat.type == ChatType.PRIVATE:
+@@ -784,56 +699,18 @@ def get_chat_context(update: Update) -> str:
+ 
+ def log_command(command_name: str = None):
+     """
+-    Decorator to automatically log all command usage to admin logs.
+-    
+-    Usage:
+-        @log_command("start")
+-        async def start_command(update, context):
+-            pass
++    No-op command logging decorator.
+     """
+     def decorator(func):
+         @functools.wraps(func)
+         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+-            try:
+-                # Get command info
+-                cmd_name = command_name or func.__name__.replace('_command', '').replace('_callback', '')
+-                user = update.effective_user
+-                chat_ctx = get_chat_context(update)
+-                
+-                # Get command text if available
+-                cmd_text = ""
+-                if update.message and update.message.text:
+-                    cmd_text = update.message.text[:100]  # First 100 chars
+-                elif update.callback_query and update.callback_query.data:
+-                    cmd_text = f"Callback: {update.callback_query.data[:50]}"
+-                
+-                # Format log message
+-                log_msg = f"👤 User: {user.first_name} (@{user.username or 'none'}, ID: {user.id})\n"
+-                if cmd_text:
+-                    log_msg += f"💬 Command: {cmd_text}"
+-                
+-                # Log to admin chat (async, non-blocking)
+-                try:
+-                    await send_admin_log(
+-                        log_msg,
+-                        log_type="command",
+-                        chat_context=chat_ctx
+-                    )
+-                except Exception as log_error:
+-                    # Don't let logging errors break commands
+-                    logger.debug(f"Failed to log command {cmd_name}: {log_error}")
+-                
+-                # Execute the original command
+-                return await func(update, context, *args, **kwargs)
+-                
+-            except Exception as e:
+-                # Log error but don't suppress it
+-                logger.error(f"Error in command {command_name or func.__name__}: {e}")
+-                raise
+-        
++            return await func(update, context, *args, **kwargs)
+         return wrapper
+     return decorator
+ 
++
++
++
+ async def safe_edit_message(query, text: str, **kwargs) -> bool:
+     """Safely edit a message with proper error handling"""
+     try:
+@@ -6148,7 +6025,7 @@ class ArenaOfChampionsBot:
+         auction.current_player = auction.player_queue[0]
+         auction.current_bids = {}
+         auction.highest_bidder = None
+-        auction.highest_bid = auction.base_price
++        auction.highest_bid = getattr(auction.current_player, 'base_price', auction.base_price)
+         
+         logger.info(f"Started auction bidding for auction {auction_id}, shuffled {len(auction.player_queue)} players")
+         return True
+@@ -6231,12 +6108,12 @@ class ArenaOfChampionsBot:
+                     sold_player, 'UNSOLD', 0, None
+                 )
+                 
+-                auction.player_queue.remove(sold_player)
+-                if auction.player_queue:
+-                    auction.current_player = auction.player_queue[0]
++                auction.current_player_index += 1
++                if auction.current_player_index < len(auction.player_queue):
++                    auction.current_player = auction.player_queue[auction.current_player_index]
+                     auction.current_bids = {}
+                     auction.highest_bidder = None  # Sync with current_bids
+-                    auction.highest_bid = auction.base_price
++                    auction.highest_bid = getattr(auction.current_player, 'base_price', auction.base_price)
+                 else:
+                     auction.current_player = None
+                     auction.status = "completed"
+@@ -6272,13 +6149,13 @@ class ArenaOfChampionsBot:
+                 sold_player, 'SOLD', amount, captain
+             )
+             
+-            # Remove from queue and set next player
+-            auction.player_queue.remove(sold_player)
+-            if auction.player_queue:
+-                auction.current_player = auction.player_queue[0]
++            # Set next player
++            auction.current_player_index += 1
++            if auction.current_player_index < len(auction.player_queue):
++                auction.current_player = auction.player_queue[auction.current_player_index]
+                 auction.current_bids = {}
+                 auction.highest_bidder = None  # Sync with current_bids reset
+-                auction.highest_bid = auction.base_price
++                auction.highest_bid = getattr(auction.current_player, 'base_price', auction.base_price)
+             else:
+                 auction.current_player = None
+                 auction.status = "completed"
+@@ -6302,7 +6179,6 @@ class ArenaOfChampionsBot:
+         
+         try:
+             current = auction.current_player
+-            auction.player_queue.remove(current)
+             # Store in unsold_players (separate from sold_players for tracking)
+             if not hasattr(auction, 'unsold_players'):
+                 auction.unsold_players = {}
+@@ -6313,13 +6189,15 @@ class ArenaOfChampionsBot:
+                 'captain': None
+             }
+             
+-            if auction.player_queue:
+-                auction.current_player = auction.player_queue[0]
++            auction.current_player_index += 1
++            if auction.current_player_index < len(auction.player_queue):
++                auction.current_player = auction.player_queue[auction.current_player_index]
+                 auction.current_bids = {}
+                 auction.highest_bidder = None
+-                auction.highest_bid = auction.base_price
++                auction.highest_bid = getattr(auction.current_player, 'base_price', auction.base_price)
+             else:
+                 auction.current_player = None
++                auction.status = "completed"
+             
+             logger.info(f"Marked player {current.name} as UNSOLD")
+             return True
+@@ -6366,14 +6244,14 @@ class ArenaOfChampionsBot:
+                 player, 'SOLD', amount, captain
+             )
+             
+-            # Remove from queue if current
++            # Advance next player index if we manually assigned the current player
+             if auction.current_player and auction.current_player.user_id == player_id:
+-                auction.player_queue.remove(player)
+-                if auction.player_queue:
+-                    auction.current_player = auction.player_queue[0]
++                auction.current_player_index += 1
++                if auction.current_player_index < len(auction.player_queue):
++                    auction.current_player = auction.player_queue[auction.current_player_index]
+                     auction.current_bids = {}
+                     auction.highest_bidder = None  # Sync with current_bids reset
+-                    auction.highest_bid = auction.base_price
++                    auction.highest_bid = getattr(auction.current_player, 'base_price', auction.base_price)
+                 else:
+                     auction.current_player = None
+                     auction.status = "completed"
+@@ -6386,7 +6264,7 @@ class ArenaOfChampionsBot:
+     def end_auction(self, auction_id: int) -> bool:
+         """End auction and finalize results"""
+         auction = self.get_approved_auction(auction_id)
+-        if not auction:
++        if not auction or auction.status != "active":
+             return False
+         
+         auction.status = "completed"
+@@ -6409,8 +6287,8 @@ class ArenaOfChampionsBot:
+     def rebid_player(self, auction_id: int, player_username: str) -> tuple:
+         """Bring back any player (sold or unsold) for rebidding by username"""
+         auction = self.get_approved_auction(auction_id)
+-        if not auction or auction.status != "active":
+-            return (False, "Auction not found or not active", None)
++        if not auction or auction.status not in ["active", "completed"]:
++            return (False, "Auction not found or not active/completed", None)
+         
+         player = None
+         player_id = None
+@@ -6438,7 +6316,7 @@ class ArenaOfChampionsBot:
+                 break
+         
+         if not player:
+-            for pid, player_data in auction.unsold_players.items():
++            for pid, player_data in list(auction.unsold_players.items()):
+                 # Handle both dict format and legacy direct object format
+                 p = player_data['player'] if isinstance(player_data, dict) else player_data
+                 p_username = getattr(p, 'username', '').lower() if hasattr(p, 'username') else ''
+@@ -6459,14 +6337,32 @@ class ArenaOfChampionsBot:
+         if not player:
+             return (False, f"Player '{player_username}' not found", None)
+         
+-        auction.player_queue.insert(0, player)
+-        auction.current_player = player
+-        auction.current_bids = {}
+-        auction.highest_bidder = None
+-        auction.highest_bid = auction.base_price
++        # Acquire lock to prevent race conditions during list modifications
++        lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=5)
++        if not lock_acquired:
++            return (False, "Could not acquire auction lock", None)
+         
+-        logger.info(f"Player {player.name} brought back for rebidding in auction {auction_id}")
+-        return (True, "Success", player)
++        try:
++            # If the auction was completed, reset it to active
++            if auction.status == "completed":
++                auction.status = "active"
++                auction.current_player_index = len(auction.player_queue)
++            
++            # Insert the player right at the current index so they are active immediately,
++            # pushing whatever was active (if any) to index + 1
++            insert_idx = auction.current_player_index
++            auction.player_queue.insert(insert_idx, player)
++            
++            # Reset bidding state for this player immediately
++            auction.current_player = player
++            auction.highest_bidder = None
++            auction.highest_bid = player.base_price
++            auction.current_bids = {}
++            
++            logger.info(f"Player {player.name} brought back for immediate rebidding in auction {auction_id}")
++            return (True, "Success", player)
++        finally:
++            auction._bid_lock.release()
+     
+     def assign_unsold_player(self, auction_id: int, player_username: str, team_name: str, amount: int) -> tuple:
+         """Assign an unsold player to a captain by username and team name"""
+@@ -6787,14 +6683,7 @@ async def give_shards_command(update: Update, context: ContextTypes.DEFAULT_TYPE
+             # Get updated balance
+             current_shards, total_earned = bot_instance.get_player_shards(player['telegram_id'])
+             
+-            # Log admin action
+-            await bot_instance.send_admin_log(
+-                'admin_action',
+-                f"Shards awarded: +{amount:,} to {player['display_name']} (ID: {player['telegram_id']}) | Reason: {reason} | New balance: {current_shards:,}",
+-                update.effective_user.id,
+-                update.effective_user.username
+-            )
+-            
++
+             await safe_send(update.message.reply_text,
+                            f"✅ <b>SHARDS AWARDED!</b>\n\n"
+                            f"👤 <b>Player:</b> {H(player['display_name'])}\n"
+@@ -6977,7 +6866,7 @@ async def distribute_daily_rewards_command(update: Update, context: ContextTypes
+                        "❌ Error distributing daily rewards. Please try again.", 
+                        parse_mode='HTML')
+ 
+-@log_command("resetdailylb")
++@log_command("resetdlb")
+ async def reset_daily_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+     """Reset daily leaderboard data (Admin only)"""
+     user_id = update.effective_user.id
+@@ -6995,7 +6884,7 @@ async def reset_daily_leaderboard_command(update: Update, context: ContextTypes.
+             await safe_send(update.message.reply_text, 
+                            "⚠️ <b>RESET DAILY LEADERBOARD</b>\n\n"
+                            "This will clear all today's leaderboard data!\n"
+-                           "Use: <code>/resetdailylb CONFIRM</code> to proceed.",
++                           "Use: <code>/resetdlb CONFIRM</code> to proceed.",
+                            parse_mode='HTML')
+             return
+         
+@@ -7855,14 +7744,8 @@ async def distribute_daily_leaderboard_rewards():
+         logger.info(f"Chase winners: {chase_winners}, Guess winners: {guess_winners}")
+         logger.info(f"Total notifications sent: {len(notifications)}")
+         
+-        # Send admin log
+-        await bot_instance.send_admin_log(
+-            'leaderboard',
+-            f"Daily rewards distributed | Total: {total_distributed:,} shards | Chase winners: {chase_winners} | Guess winners: {guess_winners}",
+-            None,
+-            "System"
+-        )
+         
++
+     except Exception as e:
+         logger.error(f"Error distributing daily leaderboard rewards: {e}")
+ 
+@@ -7966,7 +7849,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+ 👤 <b>/profile</b> - Your stats
+ 🏆 <b>/achievements</b> - Your glory
+ 💠 <b>/shardlb</b> - Rich list
+-📊 <b>/sleaderboard</b> - Top players
++📈 <b>/chasestats</b> - Chase stats
+ 
+ 🔥 <b>Time to reclaim your throne!</b> 🔥
+ """
+@@ -8134,8 +8017,8 @@ async def update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+ • 🏆 <b>Achievements:</b> Various shard bonuses
+ 
+ <b>💸 Shard Commands:</b>
+-• <code>/balance</code> - Check your shard wallet
+-• <code>/dailyreward</code> - Claim daily bonus (50+ shards)
++• <code>/shards</code> - Check your shard wallet
++• <code>/daily</code> - Claim daily bonus (50+ shards)
+ • <code>/shardlb</code> - View top shard holders
+ • <code>/shards @username</code> - Check others' balances
+ 
+@@ -8203,7 +8086,7 @@ async def update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+ 
+ 🚀 <b>GET STARTED NOW!</b>
+ 
+-1. 🎁 <b>Claim Daily Bonus:</b> <code>/dailyreward</code>
++1. 🎁 <b>Claim Daily Bonus:</b> <code>/daily</code>
+ 2. 🎮 <b>Play Your First Game:</b> <code>/chase</code> or <code>/guess</code>
+ 3. 🏆 <b>Check Your Stats:</b> <code>/profile</code>
+ 4. 📊 <b>Join Daily Competition:</b> <code>/dailylb</code>
+@@ -8218,17 +8101,17 @@ async def update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+ 
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+-🎛️ <b>NEW: COMPREHENSIVE ADMIN PANEL</b>
+-<b>Complete control center:</b> <code>/adminpanel</code>
++🛡️ <b>ADVANCED ADMIN STATUS & CONTROLS</b>
++<b>Check hierarchy and levels:</b> <code>/adminstatus</code>
+ 
+-<b>📊 8 Management Categories:</b>
++<b>📊 Management Categories:</b>
+ • <b>Bot Statistics</b> - Real-time analytics
+ • <b>User Management</b> - Player oversight tools
+ • <b>Economy Control</b> - Shard system management
+ • <b>Game Management</b> - Game stats & cleanup
+ • <b>Admin Control</b> - Add/remove admin privileges  
+ • <b>Broadcasting</b> - Announcement system
+-• <b>Achievement System</b> - Bulk operations & titles
++• <b>Achievement System</b> - Bulk awards & titles
+ • <b>System Tools</b> - Maintenance & monitoring
+ 
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@@ -8269,9 +8152,7 @@ async def update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+ 📢 <b>BROADCASTING SYSTEM OVERHAUL</b>
+ 
+ <b>📻 Enhanced Communication:</b>
+-• <code>/draftbroadcast [message]</code> - Draft announcements
+-• <code>/testbroadcast</code> - Test with admins first
+-• <code>/broadcast [message]</code> - Send to all users
++• <code>/broadcast [message]</code> - Send announcements to all users
+ • Media support (photos, videos, documents)
+ • Delivery confirmation and statistics
+ • Targeted broadcasting capabilities
+@@ -8310,8 +8191,8 @@ async def update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+ 
+ <b>⚙️ Maintenance Tools:</b>
+ • <code>/cleancache</code> - System performance optimization
+-• <code>/cachestatus</code> - View cache health & statistics
+-• <code>/threadsafety</code> - Check thread safety status
++• <code>/cstatus</code> - View cache health & statistics
++• <code>/tstatus</code> - Check thread safety status
+ • Database health monitoring
+ • Connection pool management
+ • Error tracking and resolution
+@@ -8330,10 +8211,8 @@ async def update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+ <b>💼 Essential Tools:</b>
+ • <code>/transactions [@user]</code> - Shard transaction logs
+ • <code>/cleancache</code> - Clear system cache
+-• <code>/cachestatus</code> - View cache health
+-• <code>/threadsafety</code> - Check thread safety status
+-• <code>/draftbroadcast</code> - Prepare announcements
+-• <code>/testbroadcast</code> - Admin-only test broadcasts
++• <code>/cstatus</code> - View cache health
++• <code>/tstatus</code> - Check thread safety status
+ • <code>/finduser</code> - Advanced user search
+ • <code>/botstatus</code> - System status with shard circulation
+ 
+@@ -8341,11 +8220,11 @@ async def update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+ 
+ 🚀 <b>QUICK ADMIN START GUIDE</b>
+ 
+-1. 🎛️ <b>Explore Panel:</b> <code>/adminpanel</code>
++1. 🛡️ <b>Explore Status:</b> <code>/adminstatus</code>
+ 2. 📊 <b>Check Status:</b> <code>/botstatus</code>
+-3. 👥 <b>Review Users:</b> Click "User Management"  
+-4. 📢 <b>Test Broadcast:</b> Use draft system
+-5. 💎 <b>Monitor Economy:</b> Check shard circulation
++3. 👥 <b>Find User:</b> <code>/finduser @username</code>
++4. 📢 <b>Broadcast Announcement:</b> <code>/broadcast [message]</code>
++5. 💎 <b>Monitor Economy:</b> Check shard circulation via <code>/botstatus</code>
+ 
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🛡️ <b>Your admin powers have been significantly enhanced!</b>"""
+@@ -8485,35 +8364,31 @@ async def commands_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
+ • <code>/commands</code> - This command list
+ 
+ <b>💰 ECONOMY & PROFILE:</b>  
+-• <code>/balance</code> - Check your shard balance
++• <code>/shards</code> - Check your shard balance & transactions
+ • <code>/daily</code> - Claim daily bonus (streak system)
+ • <code>/profile</code> - View complete gaming profile
+-• <code>/viewach</code> - View your achievements
+-• <code>/shards</code> - Shard leaderboard & stats
++• <code>/achievements</code> - View your achievements list
+ 
+-<b>📊 LEADERBOARDS:</b>
++<b>📊 LEADERBOARDS & UPDATES:</b>
+ • <code>/leaderboard</code> - Global leaderboard menu
+ • <code>/dailylb</code> - Daily competition rankings
+ • <code>/update</code> - Bot updates & changelog
+ 
+ <b>🎯 UTILITY:</b>
+-• <code>/quit</code> - End all active games
+-• <code>/achievements</code> - Legacy achievements command"""
++• <code>/quit</code> - End all active games"""
+     
+     elif category == "games":
+         message = f"""🎮 <b>Game Commands</b>
+ 
+ <b>🏏 CHASE GAME:</b>
+ • <code>/chase</code> - Start cricket chase game
+-• <code>/chasestats</code> - Your chase statistics
+-• <code>/sleaderboard</code> - Top 10 chase players
++• <code>/chasestats</code> - Your chase statistics & rankings
+ 
+ <b>🎲 GUESS GAMES:</b>
+ • <code>/guess</code> - Number guessing (5 difficulties)
+ • <code>/guessstats</code> - Your guess statistics  
+-• <code>/guesslb</code> - Guess game leaderboards
++• <code>/guesslb</code> - Guess game rankings
+ • <code>/dailyguess</code> - Daily challenge
+-• <code>/dglb</code> - Daily guess leaderboard
+ 
+ <b>💀 ULTIMATE CHALLENGE:</b>
+ • <code>/nightmare</code> - 10,000 number challenge
+@@ -8523,7 +8398,6 @@ async def commands_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
+ • <code>/myroast</code> - Your roast history
+ 
+ <b>📊 ADDITIONAL STATS:</b>
+-• <code>/shardlb</code> - Shard leaderboard
+ • <code>/shardlb</code> - Shard leaderboard"""
+     
+     elif category == "auctions":
+@@ -8542,15 +8416,18 @@ async def commands_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
+ • <code>/myteam</code> - View your current team
+ • <code>/purse</code> - Check remaining budget
+ • <code>/out</code> - Exit current bidding
++• <code>/transfercap [id] [@username]</code> - Transfer captaincy
+ 
+ <b>📊 INFORMATION:</b>
+ • <code>/participants [id]</code> - View all participants
++• <code>/status [id]</code> - Check live auction bidding status
+ • <code>/auctionhelp</code> - Complete auction guide
+ 
+-<b>🎯 ADMIN CONTROLS:</b>
++<b>🎯 ADMIN & HOST CONTROLS:</b>
+ • <code>/auction [id]</code> - Start manual auction
+-• <code>/next [id]</code> - Move to next player
+-• <code>/setgc [id]</code> - Set group chat"""
++• <code>/setgc [id] [chat_id]</code> - Set group chat for notifications
++• <code>/pauseauc [id]</code> - Pause or resume active auction
++• <code>/rebid [id] [username]</code> - Rebid a player (sold/unsold)"""
+     
+     elif category == "admin" and is_admin:
+         message = f"""👨‍💼 <b>Admin Commands</b>
+@@ -8576,10 +8453,15 @@ async def commands_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
+ <b>🎯 AUCTION ADMIN:</b>
+ • <code>/pending</code> - View pending proposals
+ • <code>/listauc</code> - List all auctions
++• <code>/status [id]</code> - Check live auction bidding status
+ • <code>/delauc [id]</code> - Delete auction
+ • <code>/endauc [id]</code> - Force end auction
+-• <code>/addpauc [id]</code> - Add players (reply to usernames)
+-• <code>/removepauc [id]</code> - Remove players
++• <code>/pauseauc [id]</code> - Pause or resume active auction
++• <code>/rebid [id] [username]</code> - Rebid a player (sold/unsold)
++• <code>/unsold [id] [username] [team] [amount]</code> - Assign unsold player
++• <code>/addpt [id] [username]</code> - Force add player to pool
++• <code>/addpauc [id]</code> - Bulk add players (reply to usernames)
++• <code>/removepauc [id]</code> - Bulk remove players (reply to usernames)
+ • <code>/clearauc CONFIRM</code> - Clear all auctions"""
+     
+     elif category == "superadmin" and is_super_admin:
+@@ -8598,9 +8480,7 @@ async def commands_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
+ • <code>/botstatus</code> - Bot & database status
+ 
+ <b>📢 BROADCAST SYSTEM:</b>
+-• <code>/broadcast message</code> - Send to all users
+-• <code>/draftbc message</code> - Draft broadcast
+-• <code>/testbc message</code> - Test broadcast
++• <code>/broadcast message</code> - Send announcement to all users
+ 
+ <b>🎮 GAME MANAGEMENT:</b>
+ • <code>/cleanupchase</code> - Force cleanup chase games
+@@ -8621,10 +8501,6 @@ async def commands_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
+ • <code>/cstatus</code> - Cache status information
+ • <code>/tstatus</code> - Thread safety status
+ • <code>/transactions</code> - Recent transactions
+-
+-<b>📊 MONITORING:</b>
+-• <code>/adminpanel</code> - Admin control panel
+-• <code>/testlog</code> - Test logging system
+ • <code>/emojis</code> - Achievement emoji guide
+ 
+ <b>🔧 TECHNICAL INFO:</b>
+@@ -8663,7 +8539,8 @@ async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+             [InlineKeyboardButton("🎮 Games", callback_data="help_games"),
+              InlineKeyboardButton("💠 Shards", callback_data="help_shards")],
+             [InlineKeyboardButton("🏆 Achievements", callback_data="help_achievements"),
+-             InlineKeyboardButton("📊 Stats", callback_data="help_stats")]
++             InlineKeyboardButton("📊 Stats", callback_data="help_stats")],
++            [InlineKeyboardButton("🎯 Auctions", callback_data="help_auctions")]
+         ]
+         
+         if is_admin:
+@@ -8682,6 +8559,7 @@ Choose a category below to explore:
+ 💠 <b>Shards:</b> Currency system & rewards
+ 🏆 <b>Achievements:</b> Unlock titles & bonuses
+ 📊 <b>Stats:</b> Leaderboards & tracking
++🎯 <b>Auctions:</b> Live cricket auctions & captaincy
+ ⚡ <b>Quick Commands:</b> Essential commands
+ 
+ 👇 <b>Select a category to get started!</b>"""
+@@ -8693,7 +8571,7 @@ Choose a category below to explore:
+ 
+ <b>🏏 CHASE GAME:</b>
+ • /chase - Play Run Chase cricket game
+-• /sleaderboard - View top 10 chase players
++• /chasestats - View your personal & global chase stats
+ • Hand cricket rules: same number = wicket!
+ • 🍀 15% luck factor to escape wickets
+ • ⚡ 10 second cooldown between games
+@@ -8725,9 +8603,9 @@ Choose a category below to explore:
+         message = f"""💠 <b>Shards System</b> 💰
+ 
+ <b>💠 BASIC COMMANDS:</b>
+-• /balance - Check your shard balance
++• /shards - Check your shard balance & stats
+ • /daily - Claim daily shard bonus (50-250)
+-• /shards - View shard leaderboard & stats
++• /shardlb - View shard leaderboard & stats
+ 
+ <b>💰 EARNING SHARDS:</b>
+ • 🎮 Games: 25-90 shards per game
+@@ -8755,7 +8633,7 @@ Choose a category below to explore:
+         message = f"""🏆 <b>Achievements System</b> 🏅
+ 
+ <b>🏆 BASIC COMMANDS:</b>
+-• /viewach - View your achievements
++• /achievements - View your achievements
+ • /profile - View comprehensive profile
+ 
+ <b>🏅 AVAILABLE ACHIEVEMENTS:</b>
+@@ -8802,19 +8680,24 @@ Choose a category below to explore:
+ 
+ <b>🎯 LIVE BIDDING (Manual System):</b>
+ • Type amounts directly in chat: 1, 2, 5, 10 (crores)
+-• ".." - Admin control (next player, sell, etc.)
++• ".." - Host/Admin control (next player, sell, etc.)
+ • /myteam - View your current team
+ • /purse - Check remaining budget
+ • /out - Exit bidding for current player
++• /transfercap [id] [@username] - Transfer captaincy
+ 
+-<b>🔧 ADMIN COMMANDS:</b>
++<b>🔧 ADMIN & HOST COMMANDS:</b>
+ • /auction [id] - Start manual auction
+-• /next [id] - Move to next player
+-• /setgc [id] - Set group chat for auction
++• /status [id] - Check live auction bidding status
++• /pauseauc [id] - Pause/resume active auction
++• /rebid [id] [username] - Rebid a player (sold/unsold)
++• /setgc [id] [chat_id] - Set group chat for auction
+ • /participants [id] - View all participants
+-• /addpauc [id] - Add players (reply to usernames)
+-• /removepauc [id] - Remove players (reply to usernames)
+-• /delauc [id] - Delete auction
++• /addpt [id] [username] - Force add player to pool
++• /unsold [id] [username] [team] [amount] - Assign unsold player
++• /addpauc [id] - Bulk add players (reply to usernames)
++• /removepauc [id] - Bulk remove players (reply to usernames)
++• /delauc [id] - Delete auction proposal
+ • /endauc [id] - Force end auction
+ • /clearauc CONFIRM - Clear all auction data
+ 
+@@ -8822,14 +8705,7 @@ Choose a category below to explore:
+ • All amounts in crores (1cr, 2.5cr, 10cr)
+ • Type simple numbers to bid: 1, 2, 5
+ • Real-time purse tracking
+-• Manual progression by admin
+-
+-<b>📊 FEATURES:</b>
+-• Manual auction progression
+-• Crore-based amounts for easier bidding
+-• Admin "." controls for quick actions
+-• Group chat integration
+-• Complete participant management"""
++• Manual progression by admin/host"""
+         
+         await query.edit_message_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup([back_button]))
+     
+@@ -8837,7 +8713,6 @@ Choose a category below to explore:
+         message = f"""📊 <b>Statistics & Leaderboards</b> 📈
+ 
+ <b>🏏 CHASE STATISTICS:</b>
+-• /sleaderboard - Top 10 chase players
+ • /chasestats - Your personal & global chase stats
+ • Track your best scores and levels
+ 
+@@ -8858,7 +8733,7 @@ Choose a category below to explore:
+ • Exclusive statistics for winners
+ 
+ <b>💠 SHARD TRACKING:</b>
+-• /shards - Shard leaderboard & stats
++• /shards - Shard balance & detailed stats
+ • Monitor your earning patterns
+ • Compare with other players
+ 
+@@ -8882,17 +8757,17 @@ Choose a category below to explore:
+ • /help - Navigate with buttons
+ 
+ <b>💠 SHARDS & REWARDS:</b>
+-• /balance - Check shards
++• /shards - Check shard balance
+ • /daily - Daily bonus
+-• /shards - Shard leaderboard
++• /shardlb - Shard leaderboard
+ 
+ <b>🏆 PROFILE & ACHIEVEMENTS:</b>
+-• /viewach - Your achievements
++• /achievements - Your achievements
+ • /profile - Complete profile
+ • /start - Register/update profile
+ 
+ <b>📊 LEADERBOARDS:</b>
+-• /sleaderboard - Chase top 10
++• /chasestats - Chase statistics
+ • /guesslb - Guess rankings
+ • /dailylb - Daily competitions
+ 
+@@ -8900,6 +8775,7 @@ Choose a category below to explore:
+ • /register - Create auction
+ • /regcap [id] [team] - Register as captain
+ • /regplay [id] - Register as player
++• /out - Opt out of current player bidding
+ • Type amounts (1, 2, 5) to bid in chat
+ 
+ <b>🎯 OTHER FEATURES:</b>
+@@ -8934,14 +8810,19 @@ Choose a category below to explore:
+ 
+ <b>🎯 AUCTION ADMINISTRATION:</b>
+ • /listauc - View all auctions
++• /pending - View pending proposals
+ • /delauc <id> - Delete auction
+ • /endauc <id> - Force end auction
+-• /pending - View pending proposals
++• /pauseauc <id> - Pause/resume auction
++• /status <id> - Bidding status details
++• /rebid <id> <player> - Bring back player to bid
++• /unsold <id> <player> <team> <amt> - Assign unsold player
++• /addpt <id> <username> - Force add player
+ • /clearauc CONFIRM - Clear all auctions
+ 
+ <b>📊 DAILY LEADERBOARDS:</b>
+ • /ddrlb - Trigger daily rewards
+-• /resetdailylb CONFIRM - Reset daily leaderboard
++• /resetdlb CONFIRM - Reset daily leaderboard
+ • /dlbstats - Daily leaderboard statistics
+ 
+ <b>🎯 SPECIAL FEATURES:</b>
+@@ -8973,7 +8854,6 @@ Choose a category below to explore:
+ 
+ <b>📢 BROADCAST SYSTEM:</b>
+ • /broadcast message - Send to all users/groups
+-• /groups - View active groups
+ 
+ <b>⚠️ CRITICAL OPERATIONS:</b>
+ • All admin commands available
+@@ -12003,7 +11883,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
+         message += f"💡 <b>QUICK TIPS</b>\n"
+         message += "━━━━━━━━━━━━━━━━━━━━\n"
+         message += "🎮 <b>Commands:</b> /chase, /guess, /dailyguess\n"
+-        message += "🔍 <b>View:</b> /achievements, /shards, /sleaderboard\n"
++        message += "🔍 <b>View:</b> /achievements, /shards, /shardlb\n"
+         message += "📊 <b>Stats:</b> /chasestats, /guessstats\n"
+         message += "━━━━━━━━━━━━━━━━━━━━"
+         
+@@ -14478,7 +14358,7 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
+                             next_player = active_auction.player_queue[active_auction.current_player_index]
+                             active_auction.current_player = next_player
+                             active_auction.highest_bidder = None  # Sync with current_bids
+-                            active_auction.highest_bid = active_auction.base_price
++                            active_auction.highest_bid = getattr(next_player, 'base_price', active_auction.base_price)
+                             active_auction.current_bids = {}  # Reset bids for new player
+                             
+                             # Show updated captain purses
+@@ -14573,7 +14453,7 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
+                 # Valid bid - update auction state atomically with proper lock
+                 # Validate auction has all required attributes
+                 if not hasattr(active_auction, 'highest_bid'):
+-                    active_auction.highest_bid = active_auction.base_price
++                    active_auction.highest_bid = getattr(active_auction.current_player, 'base_price', active_auction.base_price)
+                 if not hasattr(active_auction, 'highest_bidder'):
+                     active_auction.highest_bidder = None
+                 if not hasattr(active_auction, 'current_bids'):
+@@ -16206,7 +16086,7 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
+             # Reset bidding for current player
+             if auction.current_player:
+                 auction.highest_bidder = None
+-                auction.highest_bid = auction.base_price
++                auction.highest_bid = getattr(auction.current_player, 'base_price', auction.base_price)
+                 if hasattr(auction, 'current_bids'):
+                     auction.current_bids = {}
+                 # Lock will be acquired/released during next bid
+@@ -16518,7 +16398,7 @@ async def handle_auction_sale_callbacks(update: Update, context: ContextTypes.DE
+                         next_player = auction.player_queue[auction.current_player_index]
+                         auction.current_player = next_player
+                         auction.highest_bidder = None  # Sync with current_bids reset
+-                        auction.highest_bid = auction.base_price
++                        auction.highest_bid = getattr(next_player, 'base_price', auction.base_price)
+                         auction.current_bids = {}  # Reset bids for new player
+                         
+                         # Show updated captain purses
+@@ -16801,6 +16681,84 @@ async def purse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
+         logger.error(f"Error in purse_command: {e}")
+         await update.message.reply_text("❌ An error occurred!")
+ 
++@check_banned
++@log_command("out")
++async def out_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
++    """Captain opts out of the current player's bidding"""
++    try:
++        user = update.effective_user
++        auction = None
++        
++        # Detect auction
++        if context.args:
++            try:
++                auction_id = int(context.args[0])
++                auction = bot_instance.get_approved_auction(auction_id)
++            except ValueError:
++                await update.message.reply_text("❌ Invalid auction ID format!")
++                return
++        else:
++            # Auto-detect auction where user is a captain
++            for a in bot_instance.approved_auctions.values():
++                if user.id in a.approved_captains:
++                    auction = a
++                    break
++        
++        if not auction:
++            await update.message.reply_text("❌ You are not a captain in any active auction!")
++            return
++        
++        if user.id not in auction.approved_captains:
++            await update.message.reply_text("❌ You are not a captain in this auction!")
++            return
++            
++        captain = auction.approved_captains[user.id]
++        
++        if auction.status != "active":
++            await update.message.reply_text("⚠️ This auction is not currently active!")
++            return
++            
++        if not auction.current_player:
++            await update.message.reply_text("⚠️ There is no active player being bid on right now!")
++            return
++            
++        lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=5)
++        if not lock_acquired:
++            await update.message.reply_text("⏳ Processing current auction actions, please try again...")
++            return
++            
++        try:
++            player_name = auction.current_player.name
++            success = bot_instance.captain_out(auction.id, user.id)
++            if success:
++                await update.message.reply_text(
++                    f"🏳️ <b>Opted Out!</b>\n\n"
++                    f"You have opted out of bidding for <b>{player_name}</b>.",
++                    parse_mode='HTML'
++                )
++                
++                # Send update to group chat if configured
++                if auction.group_chat_id:
++                    try:
++                        await context.bot.send_message(
++                            chat_id=auction.group_chat_id,
++                            text=f"🏳️ <b>Captain Opted Out</b>\n\n"
++                                 f"👑 <b>Captain:</b> {captain.name} ({captain.team_name})\n"
++                                 f"👤 <b>Player:</b> {player_name}\n"
++                                 f"🏆 <b>Auction:</b> {auction.name}",
++                            parse_mode='HTML'
++                        )
++                    except Exception as ge:
++                        logger.error(f"Failed to send opt-out notification to group chat: {ge}")
++            else:
++                await update.message.reply_text("❌ Failed to opt out. Please try again.")
++        finally:
++            auction._bid_lock.release()
++            
++    except Exception as e:
++        logger.error(f"Error in out_command: {e}")
++        await update.message.reply_text("❌ An error occurred while processing your request!")
++
+ @check_banned
+ @log_command("transfercap")
+ async def transfercap_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+@@ -16971,20 +16929,21 @@ async def auctionhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE
+             f"━━━━━━━━━━━━━━━━━━━━\n\n"
+             
+             f"<b>Registration:</b>\n"
+-            f"• <code>/regcap [id] [team_name]</code>\n"
++            f"• <code>/regcap [id] [team_name]</code> - Register as team captain\n"
+             f"• Wait for host approval\n\n"
+             
+             f"<b>During Auction:</b>\n"
+-            f"• Type amount to bid (e.g., <code>5</code> for 5)\n"
+-            f"• <code>/out [id]</code> - Stop bidding\n"
+-            f"• <code>/myteam [id]</code> - View your team\n"
+-            f"• <code>/purse [id]</code> - Check remaining budget\n\n"
++            f"• Type amount to bid in group chat (e.g., <code>5</code> for 5Cr)\n"
++            f"• <code>/out</code> or <code>/out [id]</code> - Opt out of current player's bidding\n"
++            f"• <code>/myteam</code> - View your team's purchased players\n"
++            f"• <code>/purse</code> - Check remaining budget and team stats\n"
++            f"• <code>/transfercap [id] [@username]</code> - Transfer captaincy to someone else\n\n"
+             
+             f"━━━━━━━━━━━━━━━━━━━━\n"
+             f"👥 <b>PLAYER COMMANDS</b>\n"
+             f"━━━━━━━━━━━━━━━━━━━━\n\n"
+             
+-            f"• <code>/regplay [id]</code>\n"
++            f"• <code>/regplay [id]</code> - Register as a player for an auction\n"
+             f"• Wait for host approval to join auction pool\n\n"
+             
+             f"━━━━━━━━━━━━━━━━━━━━\n"
+@@ -16992,19 +16951,23 @@ async def auctionhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE
+             f"━━━━━━━━━━━━━━━━━━━━\n\n"
+             
+             f"<b>Information:</b>\n"
+-            f"• <code>/participants [id]</code> - View all participants\n"
+-            f"• <code>/list_auctions</code> - List all auctions (Admin)\n"
+-            f"• <code>/pending_auctions</code> - View pending proposals (Admin)\n\n"
++            f"• <code>/participants [id]</code> - View all registered participants\n"
++            f"• <code>/status [id]</code> - Check live auction bidding status\n"
++            f"• <code>/listauc</code> - List all auctions (Admin/Host)\n"
++            f"• <code>/pending</code> - View pending proposals (Admin)\n\n"
+             
+             f"<b>Group Chat Setup:</b>\n"
+-            f"• <code>/setgc [id]</code> - Set group for notifications\n\n"
+-            
+-            f"<b>Admin Controls:</b>\n"
+-            f"• <code>/delete_auction [id]</code> - Delete auction\n"
+-            f"• <code>/force_end_auction [id]</code> - Force end active auction\n"
+-            f"• <code>/rebid [id]</code> - Reset bidding for current player\n"
+-            f"• <code>/addpauc [id]</code> - Manually add players (reply to usernames)\n"
+-            f"• <code>/removepauc [id]</code> - Remove players (reply to usernames)\n\n"
++            f"• <code>/setgc [id] [chat_id]</code> - Link group chat for live bidding notifications\n\n"
++            
++            f"<b>Admin / Host Controls:</b>\n"
++            f"• <code>/delauc [id]</code> - Delete an auction proposal\n"
++            f"• <code>/endauc [id]</code> - Force complete an active auction\n"
++            f"• <code>/pauseauc [id]</code> - Pause or resume live bidding\n"
++            f"• <code>/rebid [id] [username]</code> - Rebid a player (sold or unsold)\n"
++            f"• <code>/unsold [id] [username] [team_name] [amount]</code> - Manually assign unsold player\n"
++            f"• <code>/addpt [id] [username/id]</code> - Direct force-add player to pool\n"
++            f"• <code>/addpauc [id]</code> - Bulk add players (reply to username list)\n"
++            f"• <code>/removepauc [id]</code> - Bulk remove players (reply to username list)\n\n"
+             
+             f"━━━━━━━━━━━━━━━━━━━━\n"
+             f"🎯 <b>AUCTION FLOW</b>\n"
+@@ -17123,15 +17086,18 @@ async def auction_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
+ 
+ @check_banned
+ async def rebid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+-    """Reset bidding for current player (Admin/Host only)"""
++    """Reset bidding for current player OR bring back any player by username (Admin/Host only)"""
+     try:
+         user = update.effective_user
+         
+         if len(context.args) < 1:
+             await update.message.reply_text(
+-                "❌ <b>Usage:</b> <code>/rebid [auction_id]</code>\n\n"
+-                "💡 <b>Example:</b> <code>/rebid 1</code>\n\n"
+-                "<i>This will reset bidding for the current player</i>",
++                "❌ <b>Usage:</b>\n"
++                "• <code>/rebid [auction_id]</code> - Reset bidding for the current player\n"
++                "• <code>/rebid [auction_id] [player_username]</code> - Bring back a player by username/name\n\n"
++                "💡 <b>Examples:</b>\n"
++                "• <code>/rebid 5</code>\n"
++                "• <code>/rebid 5 @john</code>",
+                 parse_mode='HTML'
+             )
+             return
+@@ -17148,54 +17114,84 @@ async def rebid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
+             return
+         
+         if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+-            await update.message.reply_text("❌ Only auction host or admin can rebid!")
++            await update.message.reply_text("❌ Only the auction host or admin can rebid!")
+             return
+         
+-        if auction.status != "active":
+-            await update.message.reply_text("❌ Auction is not active!")
++        if auction.status not in ["active", "completed"]:
++            await update.message.reply_text("❌ Auction is not active or completed!")
+             return
+-        
+-        if not auction.current_player:
+-            await update.message.reply_text("❌ No current player to rebid!")
++            
++        # Case 1: Reset bidding for the current player
++        if len(context.args) == 1:
++            if auction.status != "active":
++                await update.message.reply_text("❌ Auction is not active!")
++                return
++                
++            if not auction.current_player:
++                await update.message.reply_text("❌ No current player to rebid!")
++                return
++                
++            current_player = auction.current_player
++            auction.highest_bidder = None
++            auction.highest_bid = getattr(current_player, 'base_price', auction.base_price)
++            if hasattr(auction, 'current_bids'):
++                auction.current_bids = {}
++                
++            # Remove from sold_players if marked sold/unsold (allows re-auction)
++            if hasattr(auction, 'sold_players') and current_player.user_id in auction.sold_players:
++                del auction.sold_players[current_player.user_id]
++                logger.info(f"Removed {current_player.name} from sold_players for rebid")
++                
++            username_display = f"@{current_player.username}" if hasattr(current_player, 'username') and current_player.username else ""
++            rebid_message = (
++                f"🔄 <b>REBID STARTED!</b>\n\n"
++                f"👤 <b>{current_player.name}</b> {username_display}\n"
++                f"💎 <b>Base:</b> {format_amount(current_player.base_price)}\n\n"
++                f"🎯 <b>Fresh start - Type amount to bid!</b>\n"
++                f"📝 Admin: Reply '..' or use /sell {auction_id} to sell"
++            )
++            
++            await update.message.reply_text(rebid_message, parse_mode='HTML')
++            
++            if auction.group_chat_id and auction.group_chat_id != update.effective_chat.id:
++                try:
++                    await context.bot.send_message(
++                        chat_id=auction.group_chat_id,
++                        text=rebid_message,
++                        parse_mode='HTML'
++                    )
++                except Exception as e:
++                    logger.error(f"Failed to send rebid notification to group: {e}")
+             return
++            
++        # Case 2: Bring back player by username
++        player_username = ' '.join(context.args[1:]).strip()
++        success, message_text, player = bot_instance.rebid_player(auction_id, player_username)
+         
+-        # Reset bidding state
+-        current_player = auction.current_player
+-        auction.highest_bidder = None
+-        auction.highest_bid = auction.base_price
+-        if hasattr(auction, 'current_bids'):
+-            auction.current_bids = {}
+-        # Lock will be acquired/released during next bid
+-        
+-        # Remove from sold_players if was marked sold/unsold (allows re-auction)
+-        if hasattr(auction, 'sold_players') and current_player.user_id in auction.sold_players:
+-            del auction.sold_players[current_player.user_id]
+-            logger.info(f"Removed {current_player.name} from sold_players for rebid")
+-        
+-        username_display = f"@{current_player.username}" if hasattr(current_player, 'username') and current_player.username else ""
+-        rebid_message = (
+-            f"🔄 <b>REBID STARTED!</b>\n\n"
+-            f"👤 <b>{current_player.name}</b> {username_display}\n"
+-            f"💎 <b>Base:</b> {format_amount(current_player.base_price)}\n\n"
+-            f"🎯 <b>Fresh start - Type amount to bid!</b>\n"
+-            f"📝 Admin: Reply '..' or use /sell {auction_id} to sell"
+-        )
+-        
+-        await update.message.reply_text(rebid_message, parse_mode='HTML')
+-        
+-        # Send to group chat if set
+-        if auction.group_chat_id and auction.group_chat_id != update.effective_chat.id:
+-            try:
+-                await context.bot.send_message(
+-                    chat_id=auction.group_chat_id,
+-                    text=rebid_message,
+-                    parse_mode='HTML'
+-                )
+-            except Exception as e:
+-                logger.error(f"Failed to send rebid notification to group: {e}")
+-        
+-        logger.info(f"Rebid initiated for player {current_player.name} in auction {auction_id}")
+-        
++        if success:
++            current_player = auction.current_player
++            username_display = f"@{current_player.username}" if hasattr(current_player, 'username') and current_player.username else ""
++            message = (
++                f"🔄 <b>PLAYER BROUGHT BACK FOR REBIDDING!</b>\n\n"
++                f"👤 <b>Player:</b> {current_player.name} {username_display}\n"
++                f"💎 <b>Base Price:</b> {format_amount(current_player.base_price)}\n\n"
++                f"🎯 <b>Captains, place your bids now!</b>"
++            )
++            
++            await update.message.reply_text(message, parse_mode='HTML')
++            
++            if auction.group_chat_id and auction.group_chat_id != update.effective_chat.id:
++                try:
++                    await context.bot.send_message(
++                        chat_id=auction.group_chat_id,
++                        text=message,
++                        parse_mode='HTML'
++                    )
++                except Exception as e:
++                    logger.error(f"Failed to send group notification: {e}")
++        else:
++            await update.message.reply_text(f"❌ {message_text}")
++            
+     except Exception as e:
+         logger.error(f"Error in rebid_command: {e}")
+         await update.message.reply_text("❌ An error occurred!")
+@@ -17305,7 +17301,7 @@ async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
+                 next_player = auction.player_queue[auction.current_player_index]
+                 auction.current_player = next_player
+                 auction.highest_bidder = None  # Sync with current_bids reset
+-                auction.highest_bid = auction.base_price
++                auction.highest_bid = getattr(next_player, 'base_price', auction.base_price)
+                 auction.current_bids = {}  # Reset bids for new player
+                 # Lock will be acquired/released during bidding
+                 
+@@ -17595,71 +17591,7 @@ async def pauseauc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
+         logger.error(f"Error in pauseauc_command: {e}")
+         await update.message.reply_text("❌ An error occurred!")
+ 
+-@check_banned
+-async def rebid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+-    """Bring back any player for rebidding using username"""
+-    try:
+-        user = update.effective_user
+-        
+-        if len(context.args) < 2:
+-            await update.message.reply_text(
+-                "❌ <b>Usage:</b> <code>/rebid [auction_id] [player_username]</code>\n\n"
+-                "<b>Examples:</b>\n"
+-                "• <code>/rebid 5 @john</code>\n"
+-                "• <code>/rebid 5 john</code>\n\n"
+-                "💡 Works with @username or player name\n"
+-                "♻️ Works for sold players (will be removed from team) or unsold players",
+-                parse_mode='HTML'
+-            )
+-            return
+-        
+-        auction_id = int(context.args[0])
+-        player_username = ' '.join(context.args[1:]).strip()  # Support names with spaces
+-        
+-        auction = bot_instance.get_approved_auction(auction_id)
+-        
+-        if not auction:
+-            await update.message.reply_text("❌ Auction not found!")
+-            return
+-        
+-        if auction.status != "active":
+-            await update.message.reply_text("❌ Auction is not active!")
+-            return
+-        
+-        if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+-            await update.message.reply_text("❌ Only the auction host or admin can rebid players!")
+-            return
+-        
+-        success, message_text, player = bot_instance.rebid_player(auction_id, player_username)
+-        
+-        if success:
+-            current_player = auction.current_player
+-            message = (
+-                f"🔄 <b>PLAYER BROUGHT BACK FOR REBIDDING!</b>\n\n"
+-                f"👤 <b>Player:</b> {current_player.name}\n"
+-                f"💎 <b>Base Price:</b> {format_amount(current_player.base_price)}\n\n"
+-                f"🎯 <b>Captains, place your bids now!</b>"
+-            )
+-            
+-            await update.message.reply_text(message, parse_mode='HTML')
+-            
+-            if auction.group_chat_id:
+-                try:
+-                    await context.bot.send_message(
+-                        chat_id=auction.group_chat_id,
+-                        text=message,
+-                        parse_mode='HTML'
+-                    )
+-                except:
+-                    pass
+-        else:
+-            await update.message.reply_text(f"❌ {message_text}")
+-        
+-    except ValueError:
+-        await update.message.reply_text("❌ Invalid auction ID! Must be a number.")
+-    except Exception as e:
+-        logger.error(f"Error in rebid_command: {e}")
+-        await update.message.reply_text("❌ An error occurred!")
++# Duplicate rebid_command removed (merged with the first definition above)
+ 
+ 
+ 
+@@ -18490,6 +18422,7 @@ def register_commands(application):
+     application.add_handler(CommandHandler("sell", sell_command))
+     application.add_handler(CommandHandler("myteam", myteam_command))
+     application.add_handler(CommandHandler("purse", purse_command))
++    application.add_handler(CommandHandler("out", out_command))
+     application.add_handler(CommandHandler("transfercap", transfercap_command))
+     application.add_handler(CommandHandler("pending", pending_auctions_command))
+     application.add_handler(CommandHandler("clearauc", clear_all_auctions_command))
