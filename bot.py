@@ -18941,145 +18941,234 @@ FASTTYPE_GAMES: Dict[int, dict] = {}        # chat_id -> game state
 HPQUIZ_GAMES: Dict[int, dict] = {}         # chat_id -> game state
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA: Cricket Trivia Questions
-# ─────────────────────────────────────────────────────────────────────────────
-TRIVIA_QUESTIONS = [
-    {"q": "Who holds the record for the highest individual score in ODI cricket?", "opts": ["Rohit Sharma", "Martin Guptill", "Chris Gayle", "Virender Sehwag"], "ans": 0},
-    {"q": "Which player has scored the most runs in Test cricket history?", "opts": ["Ricky Ponting", "Sachin Tendulkar", "Kumar Sangakkara", "Jacques Kallis"], "ans": 1},
-    {"q": "Which team won the first-ever ICC Cricket World Cup in 1975?", "opts": ["Australia", "India", "West Indies", "England"], "ans": 2},
-    {"q": "Who is known as 'The God of Cricket'?", "opts": ["Brian Lara", "Sachin Tendulkar", "Don Bradman", "Virat Kohli"], "ans": 1},
-    {"q": "How many players are there in a cricket team?", "opts": ["9", "10", "11", "12"], "ans": 2},
-    {"q": "What is the highest score by a batsman in a single Test innings?", "opts": ["375 by Brian Lara", "400 not out by Brian Lara", "380 by Matthew Hayden", "365 by Garfield Sobers"], "ans": 1},
-    {"q": "Which country has won the most ICC Cricket World Cups?", "opts": ["India", "West Indies", "Australia", "England"], "ans": 2},
-    {"q": "Who took the first hat-trick in T20 International cricket?", "opts": ["Brett Lee", "Lasith Malinga", "Waqar Younis", "Shoaib Akhtar"], "ans": 1},
-    {"q": "What does 'LBW' stand for in cricket?", "opts": ["Leg Before Wicket", "Left Bat Wicket", "Low Ball Wide", "Leg Bat Wide"], "ans": 0},
-    {"q": "Who scored the fastest century in ODI cricket (31 balls)?", "opts": ["Shahid Afridi", "AB de Villiers", "Chris Gayle", "Corey Anderson"], "ans": 1},
-    {"q": "In which year did India win its first Cricket World Cup?", "opts": ["1975", "1979", "1983", "1987"], "ans": 2},
-    {"q": "Who has taken the most wickets in Test cricket?", "opts": ["Shane Warne", "Glenn McGrath", "Muttiah Muralitharan", "Anil Kumble"], "ans": 2},
-    {"q": "What is the maximum number of overs in a T20 match per side?", "opts": ["15", "20", "25", "30"], "ans": 1},
-    {"q": "Which IPL team is known as 'Men in Blue and Gold'?", "opts": ["Mumbai Indians", "Chennai Super Kings", "Kolkata Knight Riders", "Delhi Capitals"], "ans": 2},
-    {"q": "Who captained India to victory in the 2011 Cricket World Cup?", "opts": ["Rahul Dravid", "Sourav Ganguly", "MS Dhoni", "Virat Kohli"], "ans": 2},
-    {"q": "Which bowler has the best bowling average in Test cricket (min 200 wickets)?", "opts": ["Malcolm Marshall", "Dale Steyn", "Joel Garner", "George Lohmann"], "ans": 3},
-    {"q": "What is a 'googly' in cricket?", "opts": ["A wide ball", "An off-break disguised as leg-break", "A leg-break disguised as off-break", "A full toss"], "ans": 2},
-    {"q": "Who hit the first six in the history of T20 World Cup finals?", "opts": ["Chris Gayle", "MS Dhoni", "Yuvraj Singh", "Andrew Flintoff"], "ans": 0},
-    {"q": "How many balls are there in a standard cricket over?", "opts": ["4", "5", "6", "8"], "ans": 2},
-    {"q": "Which player scored 6 sixes in one over in a T20I match?", "opts": ["Chris Gayle", "Yuvraj Singh", "AB de Villiers", "Rohit Sharma"], "ans": 1},
-    {"q": "Who invented cricket?", "opts": ["English", "Australian", "Indian", "South African"], "ans": 0},
-    {"q": "What is the highest team total in ODI cricket?", "opts": ["438 by South Africa", "444 by England", "481 by England", "500 by Sri Lanka"], "ans": 2},
-    {"q": "Who won the inaugural ICC T20 World Cup in 2007?", "opts": ["Australia", "Pakistan", "India", "Sri Lanka"], "ans": 2},
-    {"q": "What is the term for a bowler dismissing 3 batsmen in 3 consecutive balls?", "opts": ["Triple play", "Hat-trick", "Triple wicket", "Three-peat"], "ans": 1},
-    {"q": "Which ground is known as the 'Home of Cricket'?", "opts": ["MCG Melbourne", "Lord's London", "Eden Gardens Kolkata", "SCG Sydney"], "ans": 1},
-    {"q": "Who holds the record for most sixes in a single IPL innings?", "opts": ["Chris Gayle", "AB de Villiers", "Rohit Sharma", "Brendon McCullum"], "ans": 0},
-    {"q": "What does a batter score when they hit the ball to the boundary without it bouncing?", "opts": ["4 runs", "6 runs", "5 runs", "3 runs"], "ans": 1},
-    {"q": "Who scored the first double century in ODI cricket?", "opts": ["Sachin Tendulkar", "Martin Guptill", "Rohit Sharma", "Chris Gayle"], "ans": 0},
-    {"q": "Which country hosted the first ever Cricket World Cup?", "opts": ["Australia", "England", "India", "West Indies"], "ans": 1},
-    {"q": "What is the minimum age to play international cricket?", "opts": ["16", "17", "18", "There is no minimum age"], "ans": 3},
-]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DATA: Emoji Cricket Teams
+# GEMINI AI CONTENT GENERATOR — Dynamic game content
 # ─────────────────────────────────────────────────────────────────────────────
-EMOJI_TEAMS = [
+import json as _json
+
+try:
+    import google.generativeai as genai
+    _genai_ok = True
+except ImportError:
+    _genai_ok = False
+
+_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+_gemini_model = None
+
+def _get_gemini_model():
+    """Lazy-load Gemini model"""
+    global _gemini_model
+    if _gemini_model is not None:
+        return _gemini_model
+    if not _GEMINI_API_KEY or not _genai_ok:
+        return None
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=_GEMINI_API_KEY)
+        _gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+        logger.info("Gemini model loaded for mini games")
+        return _gemini_model
+    except Exception as e:
+        logger.warning(f"Failed to load Gemini model: {e}")
+        return None
+
+async def _call_gemini(prompt: str) -> str:
+    """Call Gemini API asynchronously, return raw text or empty string on failure"""
+    model = _get_gemini_model()
+    if not model:
+        return ""
+    try:
+        response = await asyncio.wait_for(
+            asyncio.to_thread(model.generate_content, prompt),
+            timeout=8.0
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.warning(f"Gemini call failed: {e}")
+        return ""
+
+def _parse_json_from_gemini(text: str) -> dict:
+    """Extract JSON from Gemini response (handles markdown code blocks)"""
+    if not text:
+        return {}
+    # Strip markdown code fences if present
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    try:
+        return _json.loads(text)
+    except Exception:
+        # Try to find JSON object in the text
+        import re
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            try:
+                return _json.loads(match.group())
+            except Exception:
+                pass
+    return {}
+
+
+# ── Per-game Gemini generators (with fallback) ────────────────────────────────
+
+# Fallback static data (used when Gemini unavailable or fails)
+_FALLBACK_TRIVIA = [
+    {"q": "Who holds the record for the highest individual ODI score?", "opts": ["Rohit Sharma", "Martin Guptill", "Chris Gayle", "Virender Sehwag"], "ans": 0},
+    {"q": "Which team won the first ICC Cricket World Cup (1975)?", "opts": ["Australia", "India", "West Indies", "England"], "ans": 2},
+    {"q": "Who is known as 'The God of Cricket'?", "opts": ["Brian Lara", "Sachin Tendulkar", "Don Bradman", "Virat Kohli"], "ans": 1},
+    {"q": "Who scored the fastest ODI century (31 balls)?", "opts": ["Shahid Afridi", "AB de Villiers", "Chris Gayle", "Corey Anderson"], "ans": 1},
+    {"q": "Who has taken the most wickets in Test cricket?", "opts": ["Shane Warne", "Glenn McGrath", "Muttiah Muralitharan", "Anil Kumble"], "ans": 2},
+    {"q": "What does LBW stand for?", "opts": ["Leg Before Wicket", "Left Bat Wicket", "Low Ball Wide", "Leg Bat Wide"], "ans": 0},
+    {"q": "Which country has won the most Cricket World Cups?", "opts": ["India", "West Indies", "Australia", "England"], "ans": 2},
+    {"q": "Who captained India in the 2011 World Cup?", "opts": ["Rahul Dravid", "Sourav Ganguly", "MS Dhoni", "Virat Kohli"], "ans": 2},
+]
+
+_FALLBACK_CRICKETERS = [
+    "KOHLI", "ROHIT", "DHONI", "SACHIN", "DRAVID", "BUMRAH", "JADEJA", "ASHWIN",
+    "GAYLE", "WARNER", "SMITH", "ROOT", "STOKES", "BABAR", "RIZWAN", "WILLIAMSON",
+    "DEVILLIERS", "STEYN", "RABADA", "MALINGA", "SANGAKKARA", "MURALITHARAN",
+]
+
+_FALLBACK_WORDLE = [
+    "CATCH", "PITCH", "STUMP", "DRIVE", "SWEPT", "FLICK", "GUARD", "COVER",
+    "BLADE", "BLAZE", "STORM", "GRACE", "SWIFT", "BRAVE", "SHARP", "CLEAN",
+]
+
+_FALLBACK_SENTENCES = [
+    "Cricket is the gentleman's game played with passion",
+    "Sachin Tendulkar is the God of Cricket",
+    "Dhoni finishes it off in style with a helicopter shot",
+    "The bowler runs in and delivers a perfect yorker",
+    "India won the World Cup with a spectacular six",
+]
+
+_FALLBACK_EMOJI_TEAMS = [
     {"emojis": "🦁🏙️🔵", "answer": "Mumbai Indians", "aliases": ["mumbai", "mi", "mumbai indians"]},
     {"emojis": "🦁🌊🟡", "answer": "Chennai Super Kings", "aliases": ["chennai", "csk", "chennai super kings"]},
     {"emojis": "⚔️🏰🟣", "answer": "Kolkata Knight Riders", "aliases": ["kolkata", "kkr", "kolkata knight riders"]},
     {"emojis": "🌹👑🔴", "answer": "Royal Challengers Bengaluru", "aliases": ["rcb", "bangalore", "bengaluru", "royal challengers"]},
-    {"emojis": "🏹🔵🦅", "answer": "Delhi Capitals", "aliases": ["delhi", "dc", "delhi capitals"]},
-    {"emojis": "☀️🔶🏄", "answer": "Sunrisers Hyderabad", "aliases": ["hyderabad", "srh", "sunrisers"]},
-    {"emojis": "🌴💜🦂", "answer": "Rajasthan Royals", "aliases": ["rajasthan", "rr", "rajasthan royals"]},
-    {"emojis": "🦁🟠🏏", "answer": "Punjab Kings", "aliases": ["punjab", "pbks", "punjab kings", "kings xi"]},
-    {"emojis": "🐺⚡🟤", "answer": "Lucknow Super Giants", "aliases": ["lucknow", "lsg", "lucknow super giants"]},
-    {"emojis": "🦁🟡🏆", "answer": "Gujarat Titans", "aliases": ["gujarat", "gt", "gujarat titans"]},
-    {"emojis": "🦅🔵🌊", "answer": "Australia", "aliases": ["australia", "aus"]},
-    {"emojis": "🦁🔴⚪", "answer": "England", "aliases": ["england", "eng"]},
     {"emojis": "🐯🔵🏏", "answer": "India", "aliases": ["india", "ind"]},
-    {"emojis": "⭐🟩🌿", "answer": "Pakistan", "aliases": ["pakistan", "pak"]},
-    {"emojis": "🌺🔵⚡", "answer": "West Indies", "aliases": ["west indies", "wi", "windies"]},
-    {"emojis": "🦚🟢⭐", "answer": "South Africa", "aliases": ["south africa", "sa", "proteas"]},
-    {"emojis": "🌿🦁🔵", "answer": "Sri Lanka", "aliases": ["sri lanka", "sl", "lanka"]},
+    {"emojis": "🦅🔵🌊", "answer": "Australia", "aliases": ["australia", "aus"]},
     {"emojis": "🥝⚫⚪", "answer": "New Zealand", "aliases": ["new zealand", "nz", "blackcaps"]},
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA: Cricketer Names for Scramble & Hangman
-# ─────────────────────────────────────────────────────────────────────────────
-CRICKETERS = [
-    "KOHLI", "ROHIT", "DHONI", "SACHIN", "DRAVID", "KUMBLE", "SEHWAG", "YUVRAJ",
-    "GANGULY", "ZAHEER", "HARBHAJAN", "BUMRAH", "SHAMI", "JADEJA", "ASHWIN",
-    "GAYLE", "POLLARD", "BRAVO", "HOLDER", "RUSSELL", "NARINE", "HETMYER",
-    "WARNER", "SMITH", "STARC", "HAZLEWOOD", "MAXWELL", "STOINIS", "WADE",
-    "ROOT", "STOKES", "ARCHER", "ANDERSON", "BROAD", "BUTTLER", "BAIRSTOW",
-    "WILLIAMSON", "SOUTHEE", "BOULT", "LATHAM", "CONWAY", "PHILLIPS",
-    "BABAR", "RIZWAN", "SHAHEEN", "RAUF", "NAWAZ", "SHADAB",
-    "DEVILLIERS", "STEYN", "MORKEL", "RABADA", "MILLER", "KLAASEN",
-    "MALINGA", "MATHEWS", "JAYAWARDENE", "DILSHAN", "MENDIS",
-    "MURALITHARAN", "SANGAKKARA", "JAYASURIYA", "CHANDIMAL",
-    "PONTING", "WAUGH", "GILCHRIST", "MCGRATH", "WARNE", "HAYDEN",
-    "LARA", "AMBROSE", "WALSH", "SOBERS", "LLOYD", "GREENIDGE",
-    "MIANDAD", "IMRAN", "WAQAR", "WASIM", "INZAMAM", "YOUNIS",
-]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA: Wordle Words (5-letter cricket/sports words)
-# ─────────────────────────────────────────────────────────────────────────────
-WORDLE_WORDS = [
-    "CATCH", "PITCH", "STUMP", "DRIVE", "SWEPT", "GLIDE", "LOFTS", "EDGED",
-    "FLICK", "GUARD", "COVER", "EXTRA", "NOTCH", "PLUMB", "QUICH", "BOWLS",
-    "SOLID", "SLASH", "PUNCH", "SIXER", "THICK", "UPPER", "LOWER", "POWER",
-    "CREAM", "BLADE", "CRAMP", "GRIND", "FLAIR", "BLAZE", "STORM", "PRIME",
-    "FRONT", "ANGLE", "BRACE", "CHAIN", "DRAFT", "ELITE", "FRAME", "GLOBE",
-    "HEART", "JOINT", "KNIFE", "LANCE", "MOUNT", "NIGHT", "ORBIT", "PEARL",
-    "QUEST", "RAISE", "SCALE", "TOAST", "ULTRA", "VAULT", "WATCH", "YIELD",
-    "GRACE", "SWIFT", "BRAVE", "SHARP", "CLEAN", "SWING", "SEAM", "ROUND",
-]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA: Fast Fingers Sentences
-# ─────────────────────────────────────────────────────────────────────────────
-FASTTYPE_SENTENCES = [
-    "The quick brown fox jumps over the lazy dog",
-    "Cricket is the gentleman's game played with passion",
-    "Sachin Tendulkar is the God of Cricket",
-    "Six and four are the best shots in cricket",
-    "The bowler runs in and delivers a perfect yorker",
-    "India won the World Cup with a spectacular six",
-    "The wicketkeeper dives to take an incredible catch",
-    "Dhoni finishes it off in style with a helicopter shot",
-    "The umpire raises his finger and the batsman walks",
-    "Rain stops play but cricket never stops in our hearts",
-    "A hat trick is three wickets in three consecutive balls",
-    "The opening partnership set a solid foundation",
-    "Spin bowling is an art that requires patience",
-    "The new ball swings and seams in helpful conditions",
-    "Every match begins with a toss and a handshake",
-]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA: Hot Potato Quiz Questions
-# ─────────────────────────────────────────────────────────────────────────────
-HPQUIZ_QUESTIONS = [
+_FALLBACK_HPQUIZ = [
     {"q": "How many players are in a cricket team?", "ans": "11"},
-    {"q": "What is the full form of IPL?", "ans": "indian premier league"},
     {"q": "Who is known as the God of Cricket?", "ans": "sachin"},
-    {"q": "How many overs are in a T20 match per side?", "ans": "20"},
-    {"q": "What does LBW stand for?", "ans": "leg before wicket"},
-    {"q": "Which team has won the most IPL titles?", "ans": "mumbai indians"},
-    {"q": "How many runs does a boundary score?", "ans": "4"},
-    {"q": "How many runs does a six score?", "ans": "6"},
-    {"q": "What is the highest score by any batsman in ODIs?", "ans": "264"},
-    {"q": "In which year did India win its first World Cup?", "ans": "1983"},
-    {"q": "Who captained India in the 2011 World Cup?", "ans": "dhoni"},
-    {"q": "How many stumps are there in cricket?", "ans": "3"},
-    {"q": "What is a score of 0 called in cricket?", "ans": "duck"},
+    {"q": "How many overs in a T20 match per side?", "ans": "20"},
     {"q": "How many balls in one over?", "ans": "6"},
-    {"q": "Which country invented cricket?", "ans": "england"},
-    {"q": "Who scored the first double century in ODI cricket?", "ans": "sachin"},
-    {"q": "What is a googly?", "ans": "off spin"},
-    {"q": "Who has taken the most wickets in Test cricket?", "ans": "murali"},
-    {"q": "What is the name of the ground called Home of Cricket?", "ans": "lords"},
-    {"q": "What happens if you hit the ball over the rope without bouncing?", "ans": "six"},
+    {"q": "What is a score of 0 called in cricket?", "ans": "duck"},
 ]
+
+
+async def generate_trivia_question() -> dict:
+    """Generate a fresh cricket trivia question via Gemini, fallback to static"""
+    prompt = (
+        "Generate a unique cricket trivia question that has not been asked before. "
+        "Return ONLY a JSON object with exactly these fields: "
+        "{\"q\": \"question text\", \"opts\": [\"option A\", \"option B\", \"option C\", \"option D\"], \"ans\": <correct option index 0-3>}. "
+        "Make it interesting and factual. No markdown, just raw JSON."
+    )
+    text = await _call_gemini(prompt)
+    data = _parse_json_from_gemini(text)
+    if data.get("q") and isinstance(data.get("opts"), list) and len(data["opts"]) == 4 and isinstance(data.get("ans"), int):
+        return data
+    logger.info("Gemini trivia fallback used")
+    return random.choice(_FALLBACK_TRIVIA)
+
+
+async def generate_emoji_team() -> dict:
+    """Generate a fresh emoji cricket team puzzle via Gemini, fallback to static"""
+    prompt = (
+        "Pick a famous cricket team (IPL team or international team). "
+        "Choose 3 emojis that creatively represent the team's name, colors, or mascot. "
+        "Return ONLY a JSON object: "
+        "{\"emojis\": \"emoji1 emoji2 emoji3\", \"answer\": \"Full Team Name\", \"aliases\": [\"alias1\", \"alias2\"]}. "
+        "No markdown, just raw JSON."
+    )
+    text = await _call_gemini(prompt)
+    data = _parse_json_from_gemini(text)
+    if data.get("emojis") and data.get("answer") and isinstance(data.get("aliases"), list):
+        return data
+    logger.info("Gemini emoji team fallback used")
+    return random.choice(_FALLBACK_EMOJI_TEAMS)
+
+
+async def generate_cricketer_name() -> str:
+    """Generate a random cricketer's last name via Gemini, fallback to static"""
+    prompt = (
+        "Give me one famous cricketer's LAST NAME only (5 to 12 letters, uppercase, no spaces). "
+        "Choose someone well-known internationally. "
+        "Return ONLY a JSON object: {\"name\": \"LASTNAME\"}. No markdown."
+    )
+    text = await _call_gemini(prompt)
+    data = _parse_json_from_gemini(text)
+    name = data.get("name", "").strip().upper()
+    if name and name.isalpha() and 4 <= len(name) <= 14:
+        return name
+    logger.info("Gemini cricketer name fallback used")
+    return random.choice(_FALLBACK_CRICKETERS)
+
+
+async def generate_wordle_word() -> str:
+    """Generate a fresh 5-letter cricket/sports word via Gemini, fallback to static"""
+    prompt = (
+        "Give me exactly ONE 5-letter English word related to cricket or sports (uppercase). "
+        "It must be exactly 5 letters, a real common English word. "
+        "Return ONLY a JSON object: {\"word\": \"WORD\"}. No markdown."
+    )
+    text = await _call_gemini(prompt)
+    data = _parse_json_from_gemini(text)
+    word = data.get("word", "").strip().upper()
+    if word and word.isalpha() and len(word) == 5:
+        return word
+    logger.info("Gemini wordle word fallback used")
+    return random.choice(_FALLBACK_WORDLE)
+
+
+async def generate_fasttype_sentence() -> str:
+    """Generate a fresh cricket-themed typing sentence via Gemini, fallback to static"""
+    prompt = (
+        "Write a cricket-themed sentence for a typing race game. "
+        "Must be 8-14 words, interesting, no punctuation except commas, all lowercase. "
+        "Return ONLY a JSON object: {\"sentence\": \"your sentence here\"}. No markdown."
+    )
+    text = await _call_gemini(prompt)
+    data = _parse_json_from_gemini(text)
+    sentence = data.get("sentence", "").strip()
+    if sentence and 5 <= len(sentence.split()) <= 20:
+        return sentence
+    logger.info("Gemini sentence fallback used")
+    return random.choice(_FALLBACK_SENTENCES)
+
+
+async def generate_hpquiz_questions(count: int = 5) -> list:
+    """Generate fresh Hot Potato Quiz questions via Gemini, fallback to static"""
+    prompt = (
+        f"Generate {count} unique cricket trivia questions for a quick-answer quiz. "
+        "Each answer must be very short (1-3 words or a number). "
+        "Return ONLY a JSON array: "
+        "[{\"q\": \"question\", \"ans\": \"short answer\"}, ...]. "
+        "No markdown, just raw JSON array."
+    )
+    text = await _call_gemini(prompt)
+    # Try to parse as array
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    try:
+        data = _json.loads(text)
+        if isinstance(data, list) and len(data) >= 3:
+            valid = [q for q in data if q.get("q") and q.get("ans")]
+            if len(valid) >= 3:
+                return valid[:count]
+    except Exception:
+        pass
+    logger.info("Gemini hpquiz fallback used")
+    return random.sample(_FALLBACK_HPQUIZ, min(count, len(_FALLBACK_HPQUIZ)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -19103,7 +19192,7 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if chat_id in TRIVIA_GAMES:
         TRIVIA_GAMES.pop(chat_id)
 
-    q = random.choice(TRIVIA_QUESTIONS)
+    q = await generate_trivia_question()
     opts = q["opts"]
     game = {
         "user_id": user.id,
@@ -19225,7 +19314,7 @@ async def emojiguess_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if user.id in EMOJI_GAMES:
         EMOJI_GAMES.pop(user.id)
 
-    team = random.choice(EMOJI_TEAMS)
+    team = await generate_emoji_team()
     EMOJI_GAMES[user.id] = {
         "team": team,
         "attempts": 0,
@@ -19324,7 +19413,7 @@ async def scramble_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if user.id in SCRAMBLE_GAMES:
         SCRAMBLE_GAMES.pop(user.id)
 
-    name = random.choice(CRICKETERS)
+    name = await generate_cricketer_name()
     # Scramble: shuffle letters, ensure different from original
     letters = list(name)
     for _ in range(10):
@@ -19444,7 +19533,7 @@ async def hangman_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if user.id in HANGMAN_GAMES:
         HANGMAN_GAMES.pop(user.id)
 
-    name = random.choice(CRICKETERS)
+    name = await generate_cricketer_name()
     HANGMAN_GAMES[user.id] = {
         "name": name,
         "guessed": set(),
@@ -19589,7 +19678,7 @@ async def wordle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if user.id in WORDLE_GAMES:
         WORDLE_GAMES.pop(user.id)
 
-    word = random.choice(WORDLE_WORDS)
+    word = await generate_wordle_word()
     WORDLE_GAMES[user.id] = {
         "word": word,
         "attempts": [],
@@ -19687,7 +19776,7 @@ async def fasttype_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("⚠️ A typing race is already in progress in this chat!")
         return
 
-    sentence = random.choice(FASTTYPE_SENTENCES)
+    sentence = await generate_fasttype_sentence()
     FASTTYPE_GAMES[chat_id] = {
         "sentence": sentence,
         "started_by": user.id,
@@ -19792,7 +19881,7 @@ async def hpquiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     bot_instance.update_cooldown(user.id, "hpquiz")
 
-    questions = random.sample(HPQUIZ_QUESTIONS, min(5, len(HPQUIZ_QUESTIONS)))
+    questions = await generate_hpquiz_questions(5)
     HPQUIZ_GAMES[chat_id] = {
         "active": True,
         "questions": questions,
