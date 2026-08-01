@@ -6087,7 +6087,8 @@ class ArenaOfChampionsBot:
             # If queue is empty, populate from approved_players and shuffle
             import random
             auction.player_queue = list(auction.approved_players.values())
-            random.shuffle(auction.player_queue)
+            if getattr(auction, 'randomize_players', True):
+                random.shuffle(auction.player_queue)
         
         auction.status = "active"
         auction.current_player_index = 0
@@ -6177,6 +6178,14 @@ class ArenaOfChampionsBot:
                 auction.sold_players[sold_player.user_id] = self._record_auction_result(
                     sold_player, 'UNSOLD', 0, None
                 )
+                if not hasattr(auction, 'unsold_players'):
+                    auction.unsold_players = {}
+                auction.unsold_players[sold_player.user_id] = {
+                    'player': sold_player,
+                    'team': 'UNSOLD',
+                    'amount': 0,
+                    'captain': None
+                }
                 
                 auction.current_player_index += 1
                 if auction.current_player_index < len(auction.player_queue):
@@ -14578,6 +14587,14 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
                         active_auction.sold_players[active_auction.current_player.user_id] = bot_instance._record_auction_result(
                             active_auction.current_player, 'UNSOLD', 0, None
                         )
+                        if not hasattr(active_auction, 'unsold_players'):
+                            active_auction.unsold_players = {}
+                        active_auction.unsold_players[active_auction.current_player.user_id] = {
+                            'player': active_auction.current_player,
+                            'team': 'UNSOLD',
+                            'amount': 0,
+                            'captain': None
+                        }
                         
                         # Move to next player automatically
                         active_auction.current_player_index += 1
@@ -16406,7 +16423,7 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
         # Enhanced host validation
         is_host = (auction and (auction.creator_id == user.id or bot_instance.is_admin(user.id)))
         if not is_host:
-            await query.edit_message_text("❌ Only auction host/admin can use host panel!")
+            await query.answer("❌ Only auction host/admin can use host panel!", show_alert=True)
             return
         
         # Set group chat ID if not set
@@ -16654,15 +16671,20 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
         elif data.startswith("host_end_"):
             success = bot_instance.end_auction(auction_id)
             if success:
-                await query.edit_message_text(
-                    f"🏁 <b>Auction Ended!</b>\n\n"
-                    f"🏆 <b>Auction:</b> {auction.name}\n"
-                    f"📊 <b>Final Results:</b>\n"
-                    f"👑 Teams: {len(auction.approved_captains)}\n"
-                    f"👥 Players Sold: {len(auction.sold_players)}\n\n"
-                    f"✅ <b>Auction Complete!</b>",
-                    parse_mode='HTML'
-                )
+                try:
+                    await query.edit_message_text(
+                        f"🏁 <b>Auction Ended!</b>\n\n"
+                        f"🏆 <b>Auction:</b> {auction.name}\n"
+                        f"📊 <b>Final Results:</b>\n"
+                        f"👑 Teams: {len(auction.approved_captains)}\n"
+                        f"👥 Players Sold: {len(auction.sold_players)}\n\n"
+                        f"✅ <b>Auction Complete!</b>",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logger.error(f"Error editing message on host_end_: {e}")
+            else:
+                await query.answer("❌ Auction is already ended or not active.", show_alert=True)
         
         elif data.startswith("host_set_gc_"):
             await query.edit_message_text(
@@ -17143,7 +17165,7 @@ async def myteam_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Find the price from sold_players
             player_price = 0
             if hasattr(user_auction, 'sold_players'):
-                for sold_info in user_auction.sold_players.values():
+                for sold_info in list(user_auction.sold_players.values()):
                     if sold_info['player'].name == player_name and sold_info['captain'] == captain.name:
                         player_price = sold_info['amount']
                         break
@@ -17178,7 +17200,7 @@ async def purse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 # Calculate spent from sold_players
                 spent = 0
                 if hasattr(auction, 'sold_players'):
-                    for sold_info in auction.sold_players.values():
+                    for sold_info in list(auction.sold_players.values()):
                         if sold_info['captain'] == captain.name:
                             spent += sold_info['amount']
                 
