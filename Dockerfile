@@ -20,5 +20,7 @@ COPY . .
 EXPOSE 10000
 
 ENV PORT=10000
+ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "bot.py"]
+CMD ["python", "-u", "bot.py"]
+

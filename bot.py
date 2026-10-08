@@ -1854,7 +1854,14 @@ class ApprovedAuction:
         self._bid_lock = threading.Lock()  # Thread lock for race condition prevention in bidding
         self.last_bid_time = None  # Track timing
         self.is_paused = False
-        self.randomize_players = True
+        self.randomize_players = False
+        # RTM (Right to Match) attributes
+        self.rtm_state = None  # None, "waiting_rtm", "waiting_host_confirm", "waiting_final_bid", "waiting_rtm_match"
+        self.rtm_player = None
+        self.rtm_winning_captain = None
+        self.rtm_captain = None
+        self.rtm_base_amount = 0
+        self.rtm_final_amount = 0
 
 class CaptainRegistration:
     """Captain registration awaiting host approval"""
@@ -6087,7 +6094,7 @@ class ArenaOfChampionsBot:
             # If queue is empty, populate from approved_players and shuffle
             import random
             auction.player_queue = list(auction.approved_players.values())
-            if getattr(auction, 'randomize_players', True):
+            if getattr(auction, 'randomize_players', False):
                 random.shuffle(auction.player_queue)
         
         auction.status = "active"
@@ -6437,6 +6444,12 @@ class ArenaOfChampionsBot:
             auction.highest_bidder = None
             auction.highest_bid = player.base_price
             auction.current_bids = {}
+            auction.rtm_state = None
+            auction.rtm_player = None
+            auction.rtm_winning_captain = None
+            auction.rtm_captain = None
+            auction.rtm_base_amount = 0
+            auction.rtm_final_amount = 0
             
             logger.info(f"Player {player.name} brought back for immediate rebidding in auction {auction_id}")
             return (True, "Success", player)
@@ -8484,26 +8497,38 @@ async def commands_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 <b>🏗️ AUCTION SETUP:</b>
 • <code>/register</code> - Create auction proposal
-• <code>/hostpanel [id]</code> - Host control panel
+• <code>/hostpanel [id]</code> - Host control panel dashboard
 
 <b>👤 REGISTRATION:</b>
 • <code>/regcap [id] [team]</code> - Register as captain
-• <code>/regplay [id]</code> - Register as player
+• <code>/regplay [id]</code> - Register as player (sequential queue)
 
-<b>💰 LIVE AUCTION:</b>
-• Type amounts in chat: <code>1</code>, <code>2</code>, <code>5</code> (crores)
-• <code>/myteam</code> - View your current team
-• <code>/purse</code> - Check remaining budget
-• <code>/out</code> - Exit current bidding
+<b>💰 LIVE BIDDING:</b>
+• Type amounts in chat: <code>1</code>, <code>2.5</code>, <code>5</code> (crores)
+• First bid can start directly at player's base price!
+• <code>..</code> - Host/Admin shortcut to trigger sale confirmation
+• <code>/pause</code> or <code>/resume</code> - Pause/resume live bidding
+• <code>/myteam</code> - View your current team & purchased players
+• <code>/purse</code> - Check remaining budget & team stats
+• <code>/out</code> - Exit current player bidding
 • <code>/transfercap [id] [@username]</code> - Transfer captaincy
+
+<b>🔄 RIGHT TO MATCH (RTM):</b>
+• <code>/rtm</code> - Claim Right to Match on sold player
+• <code>/approvertm</code> / <code>/rejectrtm</code> - Host approve/reject RTM
+• <code>/keep</code> - Winning captain keeps final price
+• <code>/match</code> - RTM captain matches final bid to acquire
+• <code>/pass</code> - Decline to match
+• <code>/next</code> - Advance to next player / skip RTM
 
 <b>📊 INFORMATION:</b>
 • <code>/participants [id]</code> - View all participants
 • <code>/status [id]</code> - Check live auction bidding status
-• <code>/auctionhelp</code> - Complete auction guide
+• <code>/auctionhelp</code> - Complete interactive auction guide
 
 <b>🎯 ADMIN & HOST CONTROLS:</b>
 • <code>/auction [id]</code> - Start manual auction
+• <code>/next</code> - Move to next player in queue
 • <code>/setgc [id] [chat_id]</code> - Set group chat for notifications
 • <code>/pauseauc [id]</code> - Pause or resume active auction
 • <code>/rebid [id] [username]</code> - Rebid a player (sold/unsold)"""
@@ -8748,27 +8773,40 @@ Choose a category below to explore:
 
 <b>📝 AUCTION SETUP:</b>
 • /register - Create auction proposal (ANY USER)
-• /hostpanel [id] - Host control panel
+• /hostpanel [id] - Host control panel dashboard
 • /pending - View pending proposals (Admin)
-• /listauc - List all auctions (Admin)
+• /listauc - List all auctions (Admin/Host)
 
 <b>👑 REGISTRATION:</b>
 • /regcap [id] [team] - Register as captain
-• /regplay [id] - Register as player
+• /regplay [id] - Register as player (sequential 1, 2, 3... queue)
 • Both require host/admin approval
 
-<b>🎯 LIVE BIDDING (Manual System):</b>
-• Type amounts directly in chat: 1, 2, 5, 10 (crores)
-• ".." - Host/Admin control (next player, sell, etc.)
-• /myteam - View your current team
-• /purse - Check remaining budget
+<b>🎯 LIVE BIDDING:</b>
+• Type amounts directly in chat: <code>1</code>, <code>2.5</code>, <code>5</code> (crores)
+• First bid can start directly at player's <b>Base Price</b>!
+• Subsequent bids increase by at least 0.5Cr
+• ".." - Host/Admin shortcut in chat to trigger sale confirmation
+• /pause or /resume - Pause/resume live bidding
+• /myteam - View your current team & purchased players
+• /purse - Check remaining budget & team stats
 • /out - Exit bidding for current player
 • /transfercap [id] [@username] - Transfer captaincy
+
+<b>🔄 RIGHT TO MATCH (RTM):</b>
+• /rtm - Eligible captain claims RTM on provisionally sold player
+• /approvertm (or /rtmyes) - Host approves RTM
+• /rejectrtm (or /rtmno) - Host rejects RTM
+• /keep - Winning captain keeps final challenge price
+• /match - RTM captain matches final bid to acquire player
+• /pass - RTM captain declines match
+• /next (or /skiprtm) - Host skips RTM or advances to next player
 
 <b>🔧 ADMIN & HOST COMMANDS:</b>
 • /auction [id] - Start manual auction
 • /status [id] - Check live auction bidding status
 • /pauseauc [id] - Pause/resume active auction
+• /next - Advance to next player
 • /rebid [id] [username] - Rebid a player (sold/unsold)
 • /setgc [id] [chat_id] - Set group chat for auction
 • /participants [id] - View all participants
@@ -8780,11 +8818,10 @@ Choose a category below to explore:
 • /endauc [id] - Force end auction
 • /clearauc CONFIRM - Clear all auction data
 
-<b>💰 CRORE-BASED SYSTEM:</b>
-• All amounts in crores (1cr, 2.5cr, 10cr)
-• Type simple numbers to bid: 1, 2, 5
-• Real-time purse tracking
-• Manual progression by admin/host"""
+<b>🛡️ ROLE SECURITY & LOCKS:</b>
+• All buttons have strict role authorization locks
+• Unauthorized clicks show private alerts without disrupting chat
+• Every button action has full chat command equivalents!"""
         
         await query.edit_message_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup([back_button]))
     
@@ -8851,9 +8888,13 @@ Choose a category below to explore:
 • /dailylb - Daily competitions
 
 <b>🎯 AUCTIONS:</b>
-• /register - Create auction
+• /register - Create auction proposal
+• /hostpanel [id] - Host control panel
 • /regcap [id] [team] - Register as captain
 • /regplay [id] - Register as player
+• /pause or /resume - Pause/resume live bidding
+• /rtm, /match, /pass - Right to Match flow
+• /next - Advance to next player
 • /out - Opt out of current player bidding
 • Type amounts (1, 2, 5) to bid in chat
 
@@ -8892,7 +8933,9 @@ Choose a category below to explore:
 • /pending - View pending proposals
 • /delauc <id> - Delete auction
 • /endauc <id> - Force end auction
-• /pauseauc <id> - Pause/resume auction
+• /pause or /resume - Pause/resume live bidding
+• /next - Advance player / skip RTM
+• /approvertm & /rejectrtm - Host RTM control
 • /status <id> - Bidding status details
 • /rebid <id> <player> - Bring back player to bid
 • /unsold <id> <player> <team> <amt> - Assign unsold player
@@ -14524,8 +14567,87 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
         
         # Check if auction is paused
         if hasattr(active_auction, 'is_paused') and active_auction.is_paused:
+            bid_amount = parse_bid_amount(text)
+            if bid_amount and user_captain:
+                await update.message.reply_text(
+                    "⏸️ <b>Auction is currently PAUSED!</b>\n"
+                    "Bids are not accepted right now. Please wait for the host to resume.",
+                    parse_mode='HTML'
+                )
             return  # Auction paused, ignore all input
-        
+
+        # Check if we are in RTM final bid phase
+        if getattr(active_auction, 'rtm_state', None) == "waiting_final_bid":
+            if active_auction.rtm_winning_captain and user.id == active_auction.rtm_winning_captain.user_id:
+                bid_amount = parse_bid_amount(text)
+                if bid_amount:
+                    win_cap = active_auction.rtm_winning_captain
+                    if bid_amount < active_auction.rtm_base_amount:
+                        await update.message.reply_text(
+                            f"❌ <b>Final bid cannot be lower than your original bid ({format_amount(active_auction.rtm_base_amount)})!</b>",
+                            parse_mode='HTML'
+                        )
+                        return
+                    if bid_amount > getattr(win_cap, 'purse', 0):
+                        await update.message.reply_text(
+                            f"❌ <b>Insufficient funds!</b> Maximum you can bid is {format_amount(win_cap.purse)}.",
+                            parse_mode='HTML'
+                        )
+                        return
+                    
+                    lock_acquired = active_auction._bid_lock.acquire(blocking=True, timeout=5)
+                    if not lock_acquired:
+                        await update.message.reply_text("⏳ Processing auction actions, please retry...")
+                        return
+                    try:
+                        # Accept final bid and transition to RTM match prompt
+                        active_auction.rtm_final_amount = bid_amount
+                        active_auction.rtm_state = "waiting_rtm_match"
+                        
+                        rtm_cap = active_auction.rtm_captain
+                        player = active_auction.rtm_player or active_auction.current_player
+                        
+                        keyboard = [
+                            [
+                                InlineKeyboardButton(f"✅ Match Bid ({format_amount(active_auction.rtm_final_amount)})", callback_data=f"rtm_match_yes_{active_auction.id}"),
+                                InlineKeyboardButton("❌ Decline RTM", callback_data=f"rtm_match_no_{active_auction.id}")
+                            ]
+                        ]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                        
+                        w_team = html.escape(str(getattr(win_cap, 'team_name', 'Winning Team')))
+                        p_name = html.escape(str(getattr(player, 'name', 'Player')))
+                        r_team = html.escape(str(getattr(rtm_cap, 'team_name', 'RTM Team'))) if rtm_cap else 'RTM Team'
+                        r_name = html.escape(str(getattr(rtm_cap, 'name', 'Captain'))) if rtm_cap else 'Captain'
+                        final_amt_str = format_amount(active_auction.rtm_final_amount)
+                        
+                        match_msg = (
+                            f"🥊 <b>FINAL BID SET: {final_amt_str}!</b>\n\n"
+                            f"👑 <b>{w_team}</b> raised their final bid for <b>{p_name}</b> to <b>{final_amt_str}</b>.\n\n"
+                            f"👑 <b>{r_team}</b> ({r_name}):\n"
+                            f"Do you want to <b>MATCH</b> this bid of {final_amt_str} to acquire {p_name}?\n\n"
+                            f"💡 Click below or type <code>/match</code> or <code>/pass</code>."
+                        )
+                        try:
+                            await update.message.reply_text(match_msg, parse_mode='HTML', reply_markup=reply_markup)
+                        except Exception:
+                            plain_msg = (
+                                f"🥊 FINAL BID SET: {final_amt_str}!\n\n"
+                                f"👑 {getattr(win_cap, 'team_name', 'Winning Team')} raised their final bid for {getattr(player, 'name', 'Player')} to {final_amt_str}.\n\n"
+                                f"👑 {getattr(rtm_cap, 'team_name', 'RTM Team')}:\n"
+                                f"Do you want to MATCH this bid of {final_amt_str} to acquire {getattr(player, 'name', 'Player')}?\n\n"
+                                f"Type /match or /pass."
+                            )
+                            await update.message.reply_text(plain_msg, reply_markup=reply_markup)
+                        return
+                    finally:
+                        active_auction._bid_lock.release()
+            return  # In RTM phase, ignore other bidding inputs
+
+        # If in other RTM states, ignore normal bids
+        if getattr(active_auction, 'rtm_state', None) is not None:
+            return
+
         # CRITICAL: Only process messages in the set group chat
         if active_auction.group_chat_id and chat_id != active_auction.group_chat_id:
             return  # Message not from the designated auction group chat
@@ -14537,100 +14659,108 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
         if active_auction.status != "active":
             return
         
-        # Handle admin controls (reply with .. only)
-        if bot_instance.is_admin(user.id) or active_auction.creator_id == user.id:
-            if update.message.reply_to_message:
-                if text == "..":
-                    # Going once, going twice - show sale confirmation
-                    if active_auction.highest_bidder:
-                        captain = None
-                        for cap in active_auction.approved_captains.values():
-                            # Check captain user ID
-                            if cap.user_id == active_auction.highest_bidder:
-                                captain = cap
-                                break
-                        
-                        keyboard = [
-                            [
-                                InlineKeyboardButton("✅ Confirm Sale", callback_data=f"confirm_sale_{active_auction.id}"),
-                                InlineKeyboardButton("🔄 Continue Bidding", callback_data=f"continue_bid_{active_auction.id}")
-                            ]
-                        ]
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                        
-                        confirm_message = (
-                            f"⚠️ <b>GOING ONCE... GOING TWICE!</b> ⚠️\n\n"
-                            f"👤 <b>{active_auction.current_player.name}</b>\n"
-                            f"💰 <b>Final Bid:</b> {format_amount(active_auction.highest_bid)}\n"
-                            f"👑 <b>Winning Team:</b> {captain.team_name if captain else 'Unknown'}\n\n"
-                            f"❓ <b>Confirm this sale?</b>"
-                        )
-                        
-                        await update.message.reply_text(
-                            confirm_message,
-                            parse_mode='HTML',
-                            reply_markup=reply_markup
-                        )
-                    else:
-                        # No bids - player goes UNSOLD
-                        unsold_message = (
-                            f"📤 <b>UNSOLD!</b>\n\n"
-                            f"👤 <b>{active_auction.current_player.name}</b>\n"
-                            f"💰 No bids received (Base: {format_amount(active_auction.base_price)})"
-                        )
-                        
-                        await update.message.reply_text(unsold_message, parse_mode='HTML')
-                        
-                        # CRITICAL: Store as UNSOLD (consistent format with sell_current_player)
-                        if not hasattr(active_auction, 'sold_players'):
-                            active_auction.sold_players = {}
-                        active_auction.sold_players[active_auction.current_player.user_id] = bot_instance._record_auction_result(
-                            active_auction.current_player, 'UNSOLD', 0, None
-                        )
-                        if not hasattr(active_auction, 'unsold_players'):
-                            active_auction.unsold_players = {}
-                        active_auction.unsold_players[active_auction.current_player.user_id] = {
-                            'player': active_auction.current_player,
-                            'team': 'UNSOLD',
-                            'amount': 0,
-                            'captain': None
-                        }
-                        
-                        # Move to next player automatically
-                        active_auction.current_player_index += 1
-                        
-                        if active_auction.current_player_index < len(active_auction.player_queue):
-                            # Use player_queue (shuffled order)
-                            next_player = active_auction.player_queue[active_auction.current_player_index]
-                            active_auction.current_player = next_player
-                            active_auction.highest_bidder = None  # Sync with current_bids
-                            active_auction.highest_bid = getattr(next_player, 'base_price', active_auction.base_price)
-                            active_auction.current_bids = {}  # Reset bids for new player
-                            
-                            # Show updated captain purses
-                            captain_purses = "\n".join([
-                                f"👑 {cap.team_name}: {format_amount(cap.purse)}"
-                                for cap in active_auction.approved_captains.values()
-                            ])
-                            
-                            username_display = f"@{next_player.username}" if hasattr(next_player, 'username') and next_player.username else ""
-                            next_message = (
-                                f"🔥 <b>NEXT PLAYER</b>\n\n"
-                                f"👤 <b>{next_player.name}</b> {username_display}\n"
-                                f"💎 <b>Base:</b> {format_amount(next_player.base_price)}\n\n"
-                                f"🎯 <b>Type amount to bid!</b>\n"
-                                f"📝 Admin: Use /sell {active_auction.id} or reply '..' to sell"
-                            )
-                            
-                            await update.message.reply_text(next_message, parse_mode='HTML')
-                        else:
-                            # Auction completed
-                            active_auction.status = "completed"
-                            await update.message.reply_text(
-                                f"🏆 <b>AUCTION COMPLETED!</b>\n\n🎊 All players auctioned for {active_auction.name}!",
-                                parse_mode='HTML'
-                            )
-                    return
+        # Handle admin controls ('..' to sell)
+        if (bot_instance.is_admin(user.id) or active_auction.creator_id == user.id) and text == "..":
+            # Going once, going twice - show sale confirmation
+            if active_auction.highest_bidder:
+                captain = None
+                for cap in active_auction.approved_captains.values():
+                    # Check captain user ID
+                    if cap.user_id == active_auction.highest_bidder:
+                        captain = cap
+                        break
+                
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Confirm Sale", callback_data=f"confirm_sale_{active_auction.id}"),
+                        InlineKeyboardButton("🔄 Continue Bidding", callback_data=f"continue_bid_{active_auction.id}")
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                p_name = html.escape(str(getattr(active_auction.current_player, 'name', 'Player'))) if active_auction.current_player else 'Player'
+                c_team = html.escape(str(getattr(captain, 'team_name', 'Unknown'))) if captain else 'Unknown'
+                bid_str = format_amount(active_auction.highest_bid)
+                
+                confirm_message = (
+                    f"⚠️ <b>GOING ONCE... GOING TWICE!</b> ⚠️\n\n"
+                    f"👤 <b>{p_name}</b>\n"
+                    f"💰 <b>Final Bid:</b> {bid_str}\n"
+                    f"👑 <b>Winning Team:</b> {c_team}\n\n"
+                    f"❓ <b>Confirm this sale?</b>"
+                )
+                
+                try:
+                    await update.message.reply_text(
+                        confirm_message,
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
+                    )
+                except Exception:
+                    await update.message.reply_text(
+                        f"⚠️ GOING ONCE... GOING TWICE! ⚠️\n\n👤 {getattr(active_auction.current_player, 'name', 'Player')}\n💰 Final Bid: {bid_str}\n👑 Winning Team: {getattr(captain, 'team_name', 'Unknown') if captain else 'Unknown'}\n\n❓ Confirm this sale?",
+                        reply_markup=reply_markup
+                    )
+            else:
+                # No bids - player goes UNSOLD
+                unsold_message = (
+                    f"📤 <b>UNSOLD!</b>\n\n"
+                    f"👤 <b>{active_auction.current_player.name}</b>\n"
+                    f"💰 No bids received (Base: {format_amount(active_auction.base_price)})"
+                )
+                
+                await update.message.reply_text(unsold_message, parse_mode='HTML')
+                
+                # CRITICAL: Store as UNSOLD (consistent format with sell_current_player)
+                if not hasattr(active_auction, 'sold_players'):
+                    active_auction.sold_players = {}
+                active_auction.sold_players[active_auction.current_player.user_id] = bot_instance._record_auction_result(
+                    active_auction.current_player, 'UNSOLD', 0, None
+                )
+                if not hasattr(active_auction, 'unsold_players'):
+                    active_auction.unsold_players = {}
+                active_auction.unsold_players[active_auction.current_player.user_id] = {
+                    'player': active_auction.current_player,
+                    'team': 'UNSOLD',
+                    'amount': 0,
+                    'captain': None
+                }
+                
+                # Move to next player automatically
+                active_auction.current_player_index += 1
+                
+                if active_auction.current_player_index < len(active_auction.player_queue):
+                    # Use player_queue (shuffled order)
+                    next_player = active_auction.player_queue[active_auction.current_player_index]
+                    active_auction.current_player = next_player
+                    active_auction.highest_bidder = None  # Sync with current_bids
+                    active_auction.highest_bid = getattr(next_player, 'base_price', active_auction.base_price)
+                    active_auction.current_bids = {}  # Reset bids for new player
+                    
+                    # Show updated captain purses
+                    captain_purses = "\n".join([
+                        f"👑 {cap.team_name}: {format_amount(cap.purse)}"
+                        for cap in active_auction.approved_captains.values()
+                    ])
+                    
+                    username_display = f"@{next_player.username}" if hasattr(next_player, 'username') and next_player.username else ""
+                    next_message = (
+                        f"🔥 <b>NEXT PLAYER</b>\n\n"
+                        f"👤 <b>{next_player.name}</b> {username_display}\n"
+                        f"💎 <b>Base:</b> {format_amount(next_player.base_price)}\n\n"
+                        f"🎯 <b>Type amount to bid!</b>\n"
+                        f"📝 Admin: Use /sell {active_auction.id} or reply '..' to sell"
+                    )
+                    
+                    await update.message.reply_text(next_message, parse_mode='HTML')
+                else:
+                    # Auction completed
+                    active_auction.status = "completed"
+                    await update.message.reply_text(
+                        f"🏆 <b>AUCTION COMPLETED!</b>\n\n🎊 All players auctioned for {active_auction.name}!",
+                        parse_mode='HTML'
+                    )
+            return
         
         # Debug: Log user and captain info
         logger.info(f"Manual auction input - User {user.id}, text: '{text}', user_captain: {user_captain is not None}")
@@ -14671,9 +14801,12 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
                     )
                     return
                 
-                # Validate bid with minimum increment
+                # Validate bid with minimum increment (first bid can be base price)
                 min_increment = 0.5
-                min_required_bid = active_auction.highest_bid + min_increment
+                if active_auction.highest_bidder is None:
+                    min_required_bid = active_auction.highest_bid
+                else:
+                    min_required_bid = active_auction.highest_bid + min_increment
                 
                 if bid_amount < min_required_bid:
                     await update.message.reply_text(
@@ -14717,7 +14850,10 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
                         return
                     
                     # Check if bid is still valid (another bid might have been placed)
-                    min_required_bid = active_auction.highest_bid + 0.5
+                    if active_auction.highest_bidder is None:
+                        min_required_bid = active_auction.highest_bid
+                    else:
+                        min_required_bid = active_auction.highest_bid + 0.5
                     if bid_amount < min_required_bid:
                         # Silent fail for low bids - no message sent
                         return
@@ -16583,16 +16719,54 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
             try:
                 result = bot_instance.pause_auction(auction_id)
                 if result:
-                    status = "⏸️ PAUSED" if auction.is_paused else "▶️ RESUMED"
-                    action = "paused" if auction.is_paused else "resumed"
-                    await query.answer(f"✅ Auction {action}!", show_alert=True)
-                    # Refresh hostpanel by editing the message
-                    await hostpanel_command(update, context)
+                    status_text = "PAUSED" if auction.is_paused else "RESUMED"
+                    emoji = "⏸️" if auction.is_paused else "▶️"
+                    await query.answer(f"✅ Auction {status_text.lower()}!", show_alert=True)
+                    
+                    pause_text = "▶️ Resume Auction" if auction.is_paused else "⏸️ Pause Auction"
+                    keyboard = [
+                        [InlineKeyboardButton(pause_text, callback_data=f"host_pause_{auction_id}")],
+                        [InlineKeyboardButton("⏭️ Skip Player (Unsold)", callback_data=f"host_skip_{auction_id}")],
+                        [InlineKeyboardButton("🔄 Rebid Current", callback_data=f"host_rebid_current_{auction_id}")],
+                        [InlineKeyboardButton("👨‍⚖️ Manual Assign", callback_data=f"host_assign_{auction_id}")],
+                        [InlineKeyboardButton("⏹️ End Auction", callback_data=f"host_end_{auction_id}")],
+                        [InlineKeyboardButton("📊 Auction Info", callback_data=f"host_info_{auction_id}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    status_label = "Paused ⏸️" if auction.is_paused else "Active 🔥"
+                    panel_msg = (
+                        f"🎮 <b>Host Panel - {auction.name}</b>\n\n"
+                        f"🆔 <b>ID:</b> {auction_id}\n"
+                        f"📊 <b>Status:</b> {status_label}\n"
+                        f"👑 <b>Captains:</b> {len(auction.approved_captains)}\n"
+                        f"👥 <b>Players:</b> {len(auction.approved_players)}\n\n"
+                        f"🎯 <b>Choose an action:</b>"
+                    )
+                    try:
+                        await query.edit_message_text(panel_msg, parse_mode='HTML', reply_markup=reply_markup)
+                    except Exception as edit_err:
+                        logger.debug(f"Could not edit panel: {edit_err}")
+                    
+                    # Notify the auction group
+                    if auction.group_chat_id:
+                        group_msg = (
+                            f"{emoji} <b>AUCTION {status_text}!</b>\n\n"
+                            f"🏆 <b>Auction:</b> {auction.name}\n"
+                            f"📊 <b>Status:</b> {status_text}\n\n"
+                        )
+                        if auction.is_paused:
+                            group_msg += "⏸️ <b>Bidding is temporarily paused</b>\n💡 Host can resume anytime."
+                        else:
+                            group_msg += "▶️ <b>Bidding has resumed!</b>\n🎯 Captains can continue bidding."
+                        try:
+                            await context.bot.send_message(chat_id=auction.group_chat_id, text=group_msg, parse_mode='HTML')
+                        except Exception as ge:
+                            logger.debug(f"Failed to notify group of pause: {ge}")
                 else:
                     await query.answer("❌ Failed to toggle pause!", show_alert=True)
             except Exception as e:
-                logger.error(f"Error in host_pause callback: {e}")
-                await query.answer("✅ Pause toggled!", show_alert=True)
+                logger.error(f"Error in host_pause callback: {e}", exc_info=True)
+                await query.answer("❌ Error toggling pause!", show_alert=True)
         
         elif data.startswith("host_rebid_current_"):
             if not auction.current_player:
@@ -16729,7 +16903,7 @@ async def handle_captain_approval_callbacks(update: Update, context: ContextType
         
         auction = bot_instance.get_approved_auction(auction_id)
         if not auction or (auction.creator_id != user.id and not bot_instance.is_admin(user.id)):
-            await query.edit_message_text("❌ Access denied!")
+            await query.answer("⛔ Access Denied! Only the Auction Host or Bot Admin can approve captains.", show_alert=True)
             return
         
         if data.startswith("approve_captain_"):
@@ -16827,7 +17001,7 @@ async def handle_captain_approval_callbacks(update: Update, context: ContextType
         await query.answer("❌ An error occurred!")
 
 async def handle_auction_sale_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle auction sale confirmation callbacks"""
+    """Handle auction sale confirmation callbacks with strict authorization and alert popups"""
     try:
         query = update.callback_query
         user = query.from_user
@@ -16839,34 +17013,29 @@ async def handle_auction_sale_callbacks(update: Update, context: ContextTypes.DE
             
             auction = bot_instance.get_approved_auction(auction_id)
             if not auction:
-                await query.edit_message_text("❌ Auction not found!")
+                await query.answer("❌ Auction not found!", show_alert=True)
                 return
             
-            # Check if user is host or admin
+            # Check if user is host or admin - POPUP ALERT ONLY, DO NOT OVERWRITE GROUP MESSAGE
             if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
-                await query.edit_message_text("❌ Only auction host or admin can confirm sales!")
+                await query.answer("⛔ Access Denied! Only the Auction Host or Bot Admin can confirm sales.", show_alert=True)
                 return
             
             # Prevent race condition with proper lock
             lock_acquired = auction._bid_lock.acquire(blocking=False)
             if not lock_acquired:
-                await query.answer("⏳ Sale already being processed!")
+                await query.answer("⏳ Sale already being processed, please wait!", show_alert=True)
                 return
             
             try:
                 current_player = auction.current_player
                 if not current_player:
-                    await query.edit_message_text("❌ No current player!")
+                    await query.answer("❌ No current player being auctioned!", show_alert=True)
                     return
                 
                 # Prevent double-selling: check if player already sold
                 if hasattr(auction, 'sold_players') and current_player.user_id in auction.sold_players:
-                    await query.edit_message_text(
-                        f"⚠️ <b>Already Sold!</b>\n\n"
-                        f"👤 <b>{current_player.name}</b> has already been sold.\n"
-                        f"Use /next {auction_id} to move to next player.",
-                        parse_mode='HTML'
-                    )
+                    await query.answer("⚠️ This player has already been sold!", show_alert=True)
                     return
                 
                 # Complete the sale manually
@@ -16881,146 +17050,971 @@ async def handle_auction_sale_callbacks(update: Update, context: ContextTypes.DE
                     if winning_captain:
                         # CRITICAL: Validate purse is sufficient (prevent negative purse)
                         if winning_captain.purse < auction.highest_bid:
-                            await query.edit_message_text(
-                                f"❌ <b>Error!</b> {winning_captain.team_name} has insufficient funds!\n\n"
-                                f"💎 <b>Bid:</b> {format_amount(auction.highest_bid)}\n"
-                                f"💰 <b>Purse:</b> {format_amount(winning_captain.purse)}\n\n"
-                                f"🔄 Use /rebid {auction_id} to restart bidding.",
-                                parse_mode='HTML'
-                            )
+                            await query.answer(f"❌ Error! {winning_captain.team_name} has insufficient funds!", show_alert=True)
                             return
                         
-                        # Deduct from captain's purse
-                        winning_captain.purse -= auction.highest_bid
-                        winning_captain.spent = getattr(winning_captain, 'spent', 0) + auction.highest_bid
+                        # Set RTM state
+                        auction.rtm_state = "waiting_rtm"
+                        auction.rtm_player = current_player
+                        auction.rtm_winning_captain = winning_captain
+                        auction.rtm_base_amount = auction.highest_bid
+                        auction.rtm_final_amount = auction.highest_bid
+                        auction.rtm_captain = None
                         
-                        # Add player to captain's team (store player NAME for consistency)
-                        if not hasattr(winning_captain, 'players'):
-                            winning_captain.players = []
-                        winning_captain.players.append(auction.current_player.name)
+                        keyboard = [
+                            [
+                                InlineKeyboardButton("🔄 Use RTM", callback_data=f"rtm_request_{auction.id}"),
+                                InlineKeyboardButton("➡️ Next Player (No RTM)", callback_data=f"rtm_skip_{auction.id}")
+                            ]
+                        ]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
                         
-                        # Mark player as sold (CONSISTENT FORMAT with sell_current_player)
-                        if not hasattr(auction, 'sold_players'):
-                            auction.sold_players = {}
-                        auction.sold_players[auction.current_player.user_id] = bot_instance._record_auction_result(
-                            auction.current_player, 'SOLD', auction.highest_bid, winning_captain
-                        )
-                    
+                        p_name = html.escape(str(getattr(current_player, 'name', 'Player')))
+                        t_name = html.escape(str(getattr(winning_captain, 'team_name', 'Winning Team')))
+                        bid_val = format_amount(auction.highest_bid)
+                        rem_purse = format_amount(max(0, getattr(winning_captain, 'purse', 0) - auction.highest_bid))
+                        
                         sold_message = (
-                            f"✅ <b>SOLD!</b> ✅\n\n"
-                            f"👤 <b>Player:</b> {current_player.name}\n"
-                            f"👑 <b>Team:</b> {winning_captain.team_name}\n"
-                            f"💰 <b>Sold for:</b> {format_amount(auction.highest_bid)}\n"
-                            f"💳 <b>Remaining Purse:</b> {format_amount(winning_captain.purse)}\n\n"
+                            f"✅ <b>PROVISIONALLY SOLD!</b> ✅\n\n"
+                            f"👤 <b>Player:</b> {p_name}\n"
+                            f"👑 <b>Winning Team:</b> {t_name}\n"
+                            f"💰 <b>Winning Bid:</b> {bid_val}\n"
+                            f"💳 <b>Remaining Purse:</b> {rem_purse}\n\n"
+                            f"🔄 <b>RIGHT TO MATCH (RTM) WINDOW OPEN!</b>\n"
+                            f"• Captains: Click <b>[🔄 Use RTM]</b> or type <code>/rtm</code>\n"
+                            f"• Host: Click <b>[➡️ Next Player (No RTM)]</b> or type <code>/next</code> to proceed without RTM."
                         )
                         
-                        # Log player sold to admin
-                        try:
-                            await send_admin_log(
-                                f"💰 PLAYER SOLD\n"
-                                f"🏆 Auction: {auction.name} (ID: {auction.id})\n"
-                                f"👤 Player: {current_player.name}\n"
-                                f"👑 Team: {winning_captain.team_name}\n"
-                                f"💵 Amount: {format_amount(auction.highest_bid)}\n"
-                                f"💳 Purse Remaining: {format_amount(winning_captain.purse)}",
-                                log_type="auction",
-                                chat_context=f"Auction {auction.id}"
-                            )
-                        except Exception as log_err:
-                            logger.debug(f"Failed to log player sold: {log_err}")
-                    
-                    # Move to next player automatically
-                    auction.current_player_index += 1
-                    
-                    # Check if there are more players in the shuffled queue
-                    if auction.current_player_index < len(auction.player_queue):
-                        # Use player_queue (shuffled order)
-                        next_player = auction.player_queue[auction.current_player_index]
-                        auction.current_player = next_player
-                        auction.highest_bidder = None  # Sync with current_bids reset
-                        auction.highest_bid = getattr(next_player, 'base_price', auction.base_price)
-                        auction.current_bids = {}  # Reset bids for new player
+                        await edit_auction_message(query, sold_message, reply_markup=reply_markup)
+                        await query.answer(f"✅ Provisionally sold to {getattr(winning_captain, 'team_name', 'team')} - RTM window open!")
                         
-                        # Show updated captain purses
-                        captain_purses = "\n".join([
-                            f"👑 {cap.team_name}: {format_amount(cap.purse)}"
-                            for cap in auction.approved_captains.values()
-                        ])
-                        
-                        username_display = f"@{next_player.username}" if hasattr(next_player, 'username') and next_player.username else ""
-                        sold_message += (
-                            f"\n🎯 <b>NEXT PLAYER</b>\n\n"
-                            f"👤 <b>{next_player.name}</b> {username_display}\n"
-                            f"💰 <b>Base Price:</b> {format_amount(next_player.base_price)}\n"
-                            f"📊 <b>Player {auction.current_player_index + 1}/{len(auction.player_queue)}</b>\n\n"
-                            f"💳 <b>Team Purses:</b>\n{captain_purses}\n\n"
-                            f"🎯 <b>Captains, type your bid!</b>"
-                        )
+                        # Send to group chat if not already there
+                        if auction.group_chat_id and (not update.effective_chat or update.effective_chat.id != auction.group_chat_id):
+                            await send_auction_message(context.bot, auction.group_chat_id, sold_message, reply_markup=reply_markup)
                     else:
-                        # Auction completed
-                        auction.status = "completed"
-                        sold_message += "🏆 <b>AUCTION COMPLETED!</b>\n\nAll players have been sold!"
-                    
-                    await query.edit_message_text(sold_message, parse_mode='HTML')
-                    
-                    # Send immediate confirmation
-                    await query.answer(f"✅ {current_player.name} sold to {winning_captain.team_name if winning_captain else 'Unknown'}!")
-                    
-                    # Send to group chat if set
-                    if auction.group_chat_id:
-                        try:
-                            await context.bot.send_message(
-                                chat_id=auction.group_chat_id,
-                                text=sold_message,
-                                parse_mode='HTML'
-                            )
-                        except Exception as e:
-                            logger.error(f"Failed to send sale notification to group: {e}")
-                else:
-                    await query.edit_message_text("❌ Captain not found for sale confirmation!")
-            
+                        await query.answer("❌ Captain not found for sale confirmation!", show_alert=True)
+                
             finally:
-                # Always release lock
                 auction._bid_lock.release()
         
         elif data.startswith("continue_bid_"):
-            auction_id = int(data.split('_')[2])
+            parts = data.split('_')
+            auction_id = int(parts[2])
             auction = bot_instance.get_approved_auction(auction_id)
+            if not auction:
+                await query.answer("❌ Auction not found!", show_alert=True)
+                return
+            
+            # Check host or admin authorization - POPUP ALERT ONLY
+            if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+                await query.answer("⛔ Access Denied! Only the Auction Host or Bot Admin can resume bidding.", show_alert=True)
+                return
+            
+            # Reset RTM attributes when resuming normal bidding
+            auction.rtm_state = None
+            auction.rtm_player = None
+            auction.rtm_winning_captain = None
+            auction.rtm_captain = None
+            auction.rtm_base_amount = 0
+            auction.rtm_final_amount = 0
             
             current_status = ""
-            if auction and auction.current_player:
+            if auction.current_player:
+                p_name = html.escape(str(getattr(auction.current_player, 'name', 'Player')))
                 current_status = (
-                    f"👤 <b>Current:</b> {auction.current_player.name}\n"
+                    f"👤 <b>Current:</b> {p_name}\n"
                     f"💰 <b>Highest Bid:</b> {format_amount(auction.highest_bid)}\n\n"
                 )
             
-            await query.edit_message_text(
+            cont_msg = (
                 f"🔄 <b>Bidding Continues!</b>\n\n"
                 f"{current_status}"
                 f"💡 <b>Captains can continue placing bids.</b>\n"
-                f"📝 <b>Admin:</b> Reply '..' or use /sell {auction_id} when ready.",
-                parse_mode='HTML'
+                f"📝 <b>Admin:</b> Reply '..' or use /sell {auction_id} when ready."
             )
+            await edit_auction_message(query, cont_msg)
             await query.answer("Bidding resumed!")
         
-        await query.answer()
-        
     except telegram_error.BadRequest as e:
-        if "query is too old" in str(e).lower():
-            logger.warning(f"Sale callback query too old: {e}")
+        if "query is too old" in str(e).lower() or "query is already answered" in str(e).lower():
+            logger.warning(f"Sale callback query benign: {e}")
             return
         else:
             logger.error(f"BadRequest in auction sale callbacks: {e}")
             try:
-                await query.answer("❌ Request failed - please try again")
+                await query.answer("❌ Request failed - please try again", show_alert=True)
             except:
                 pass
     except Exception as e:
         logger.error(f"Error in auction sale callbacks: {e}")
         try:
-            await query.answer("❌ An error occurred!")
+            await query.answer("❌ An error occurred!", show_alert=True)
         except:
             pass
+
+# ====================================
+# AUCTION RTM & SEQUENTIAL ADVANCEMENT
+# ====================================
+
+def safe_escape(text: Any) -> str:
+    """Safely escape text for Telegram HTML parse_mode"""
+    if text is None:
+        return ""
+    return html.escape(str(text))
+
+async def send_auction_message(bot, chat_id: int, html_text: str, reply_markup=None):
+    """Send auction message with HTML parse mode, with automatic plain-text fallback on error"""
+    if not chat_id:
+        return None
+    try:
+        return await bot.send_message(chat_id=chat_id, text=html_text, parse_mode='HTML', reply_markup=reply_markup)
+    except Exception as e:
+        logger.warning(f"Failed to send HTML auction message: {e}, falling back to plain text")
+        try:
+            import re
+            plain_text = re.sub(r'<[^>]+>', '', html_text)
+            return await bot.send_message(chat_id=chat_id, text=plain_text, reply_markup=reply_markup)
+        except Exception as e2:
+            logger.error(f"Failed to send plain text auction message: {e2}")
+            return None
+
+async def edit_auction_message(query, html_text: str, reply_markup=None):
+    """Edit auction callback message with HTML parse mode, with automatic plain-text fallback on error"""
+    try:
+        return await query.edit_message_text(text=html_text, parse_mode='HTML', reply_markup=reply_markup)
+    except Exception as e:
+        logger.warning(f"Failed to edit HTML auction message: {e}, falling back to plain text")
+        try:
+            import re
+            plain_text = re.sub(r'<[^>]+>', '', html_text)
+            return await query.edit_message_text(text=plain_text, reply_markup=reply_markup)
+        except Exception as e2:
+            logger.error(f"Failed to edit plain text auction message: {e2}")
+            return None
+
+def finalize_player_sale(auction: ApprovedAuction, player, captain, amount: int):
+    """Safely finalize sale, update captain purse and record player in team roster with full fallback safety"""
+    if not player or not captain:
+        logger.error(f"Cannot finalize sale: player={player}, captain={captain}")
+        return
+        
+    player.is_sold = True
+    player.winning_team = getattr(captain, 'team_name', 'Unknown')
+    player.sold_price = amount
+    
+    if hasattr(captain, 'purse'):
+        captain.purse = max(0, getattr(captain, 'purse', 0) - amount)
+    captain.spent = getattr(captain, 'spent', 0) + amount
+    if not hasattr(captain, 'players') or captain.players is None:
+        captain.players = []
+    p_name = getattr(player, 'name', 'Player')
+    if p_name not in captain.players:
+        captain.players.append(p_name)
+    
+    pid = getattr(player, 'user_id', None) or getattr(player, 'id', None) or hash(p_name)
+    if not hasattr(auction, 'sold_players') or auction.sold_players is None:
+        auction.sold_players = {}
+    auction.sold_players[pid] = bot_instance._record_auction_result(
+        player, 'SOLD', amount, captain
+    )
+    
+    # Always reset RTM state attributes on auction to prevent state leakage
+    auction.rtm_state = None
+    auction.rtm_player = None
+    auction.rtm_winning_captain = None
+    auction.rtm_captain = None
+    auction.rtm_base_amount = 0
+    auction.rtm_final_amount = 0
+    
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(send_admin_log(
+            f"💰 PLAYER SOLD\n"
+            f"🏆 Auction: {auction.name} (ID: {auction.id})\n"
+            f"👤 Player: {p_name}\n"
+            f"👑 Team: {getattr(captain, 'team_name', 'Team')}\n"
+            f"💵 Amount: {format_amount(amount)}\n"
+            f"💳 Purse Remaining: {format_amount(getattr(captain, 'purse', 0))}",
+            log_type="auction",
+            chat_context=f"Auction {auction.id}"
+        ))
+    except (RuntimeError, Exception) as log_err:
+        logger.debug(f"Failed to log player sold: {log_err}")
+
+async def advance_to_next_player(auction: ApprovedAuction, context: ContextTypes.DEFAULT_TYPE, target_chat_id: int = None):
+    """Move to the next player in sequential order and announce with HTML safety"""
+    auction.current_player_index += 1
+    auction.rtm_state = None
+    auction.rtm_player = None
+    auction.rtm_winning_captain = None
+    auction.rtm_captain = None
+    auction.rtm_base_amount = 0
+    auction.rtm_final_amount = 0
+    
+    chat_id = target_chat_id or auction.group_chat_id
+    
+    if not hasattr(auction, 'player_queue') or auction.player_queue is None:
+        auction.player_queue = []
+    
+    if auction.current_player_index < len(auction.player_queue):
+        next_player = auction.player_queue[auction.current_player_index]
+        auction.current_player = next_player
+        auction.highest_bidder = None
+        auction.highest_bid = getattr(next_player, 'base_price', getattr(auction, 'base_price', 1))
+        auction.current_bids = {}
+        
+        captain_purses = "\n".join([
+            f"• {safe_escape(getattr(cap, 'team_name', 'Team'))}: {format_amount(getattr(cap, 'purse', 0))}"
+            for cap in getattr(auction, 'approved_captains', {}).values()
+        ])
+        
+        p_name = safe_escape(getattr(next_player, 'name', 'Unknown'))
+        p_user = f"@{next_player.username}" if getattr(next_player, 'username', None) else ""
+        base_val = format_amount(getattr(next_player, 'base_price', getattr(auction, 'base_price', 1)))
+        
+        next_message = (
+            f"🎯 <b>NEXT PLAYER ({auction.current_player_index + 1}/{len(auction.player_queue)})</b>\n\n"
+            f"👤 <b>{p_name}</b> {safe_escape(p_user)}\n"
+            f"💎 <b>Base Price:</b> {base_val}\n\n"
+            f"💳 <b>Team Purses:</b>\n{captain_purses}\n\n"
+            f"🎯 <b>Captains, type your bid!</b>\n"
+            f"📝 Host: Reply '..' or use /sell {auction.id} to sell"
+        )
+        if chat_id:
+            await send_auction_message(context.bot, chat_id, next_message)
+    else:
+        auction.status = "completed"
+        auction.current_player = None
+        auc_name = safe_escape(getattr(auction, 'name', 'Auction'))
+        complete_msg = f"🏆 <b>AUCTION COMPLETED!</b>\n\n🎊 All players in {auc_name} have been auctioned!"
+        if chat_id:
+            await send_auction_message(context.bot, chat_id, complete_msg)
+
+async def process_rtm_request(user, auction: ApprovedAuction, context: ContextTypes.DEFAULT_TYPE, reply_to_msg=None, query=None):
+    """Validate and initiate Right To Match process with strict permission and state guards"""
+    if getattr(auction, 'rtm_state', None) != "waiting_rtm":
+        msg = "⚠️ RTM window is closed for this player!"
+        if query:
+            await query.answer(msg, show_alert=True)
+        elif reply_to_msg:
+            await reply_to_msg.reply_text(msg)
+        return
+    
+    if user.id not in getattr(auction, 'approved_captains', {}):
+        msg = "⛔ Access Denied! Only registered team captains can exercise RTM."
+        if query:
+            await query.answer(msg, show_alert=True)
+        elif reply_to_msg:
+            await reply_to_msg.reply_text(msg)
+        return
+    
+    claiming_cap = auction.approved_captains[user.id]
+    winning_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+    
+    if winning_cap and claiming_cap.user_id == winning_cap.user_id:
+        msg = "⚠️ You are already the winning bidder! You cannot RTM yourself."
+        if query:
+            await query.answer(msg, show_alert=True)
+        elif reply_to_msg:
+            await reply_to_msg.reply_text(msg)
+        return
+    
+    base_amt = auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+    if getattr(claiming_cap, 'purse', 0) < base_amt:
+        msg = f"⚠️ Insufficient purse ({format_amount(claiming_cap.purse)}) to match current bid ({format_amount(base_amt)})!"
+        if query:
+            await query.answer(msg, show_alert=True)
+        elif reply_to_msg:
+            await reply_to_msg.reply_text(msg)
+        return
+    
+    # Claim RTM
+    auction.rtm_state = "waiting_host_confirm"
+    auction.rtm_captain = claiming_cap
+    auction.rtm_base_amount = base_amt
+    player = auction.rtm_player or auction.current_player
+    
+    if query:
+        await query.answer("✅ RTM requested! Awaiting host approval.", show_alert=True)
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Approve RTM", callback_data=f"rtm_host_yes_{auction.id}"),
+            InlineKeyboardButton("❌ Reject RTM", callback_data=f"rtm_host_no_{auction.id}")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    p_name = safe_escape(getattr(player, 'name', 'Player'))
+    c_team = safe_escape(getattr(claiming_cap, 'team_name', 'Claiming Team'))
+    c_name = safe_escape(getattr(claiming_cap, 'name', 'Captain'))
+    w_team = safe_escape(getattr(winning_cap, 'team_name', 'Winning Bidder')) if winning_cap else 'Unknown'
+    
+    confirm_msg = (
+        f"🔄 <b>RIGHT TO MATCH (RTM) CLAIMED!</b>\n\n"
+        f"👤 <b>Player:</b> {p_name}\n"
+        f"👑 <b>Claiming Team:</b> {c_team} ({c_name})\n"
+        f"💰 <b>Current Sold Price:</b> {format_amount(base_amt)}\n"
+        f"👑 <b>Winning Bidder:</b> {w_team}\n\n"
+        f"❓ <b>Host / Admin: Do you APPROVE this RTM?</b>\n"
+        f"💡 Click buttons below or type <code>/approvertm</code> or <code>/rejectrtm</code>."
+    )
+    
+    chat_id = auction.group_chat_id or (reply_to_msg.chat_id if reply_to_msg else None)
+    if chat_id:
+        await send_auction_message(context.bot, chat_id, confirm_msg, reply_markup=reply_markup)
+
+async def handle_rtm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle all RTM callback buttons with strict authorization locks and race condition prevention"""
+    query = update.callback_query
+    user = query.from_user
+    data = query.data
+    
+    try:
+        parts = data.split('_')
+        # Format: rtm_{action}_{auction_id} or rtm_host_{yes/no}_{auction_id} or rtm_final_keep_{auction_id} or rtm_match_{yes/no}_{auction_id}
+        action = parts[1]
+        auction_id = int(parts[-1])
+        auction = bot_instance.get_approved_auction(auction_id)
+        if not auction:
+            await query.answer("❌ Auction not found!", show_alert=True)
+            return
+            
+        # Prevent concurrent button presses with lock
+        lock_acquired = auction._bid_lock.acquire(blocking=False)
+        if not lock_acquired:
+            await query.answer("⏳ Another action is currently processing, please try again in a moment.", show_alert=True)
+            return
+            
+        try:
+            # 1. Captain clicks Use RTM
+            if action == "request":
+                await process_rtm_request(user, auction, context, query=query)
+                return
+            
+            # 2. Host Skips RTM (No RTM)
+            elif action == "skip":
+                if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+                    await query.answer("⛔ Access Denied! Only the Auction Host or Bot Admin can skip RTM and proceed.", show_alert=True)
+                    return
+                
+                if getattr(auction, 'rtm_state', None) != "waiting_rtm":
+                    await query.answer("⚠️ RTM window is no longer open for this player.", show_alert=True)
+                    return
+                
+                win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+                player = auction.rtm_player or auction.current_player
+                amount = auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+                
+                if player and win_cap:
+                    finalize_player_sale(auction, player, win_cap, amount)
+                    p_name = safe_escape(getattr(player, 'name', 'Player'))
+                    t_name = safe_escape(getattr(win_cap, 'team_name', 'Team'))
+                    sold_msg = (
+                        f"✅ <b>SOLD (No RTM Used)!</b>\n\n"
+                        f"👤 <b>Player:</b> {p_name}\n"
+                        f"👑 <b>Team:</b> {t_name}\n"
+                        f"💰 <b>Final Price:</b> {format_amount(amount)}\n"
+                        f"💳 <b>Remaining Purse:</b> {format_amount(getattr(win_cap, 'purse', 0))}"
+                    )
+                    await edit_auction_message(query, sold_msg)
+                await advance_to_next_player(auction, context)
+                return
+            
+            # 3. Host Rejects RTM
+            elif action == "host" and parts[2] == "no":
+                if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+                    await query.answer("⛔ Access Denied! Only the Auction Host or Bot Admin can decide RTM approval.", show_alert=True)
+                    return
+                
+                if getattr(auction, 'rtm_state', None) != "waiting_host_confirm":
+                    await query.answer("⚠️ This RTM decision has already been handled.", show_alert=True)
+                    return
+                
+                win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+                player = auction.rtm_player or auction.current_player
+                amount = auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+                
+                if player and win_cap:
+                    finalize_player_sale(auction, player, win_cap, amount)
+                    p_name = safe_escape(getattr(player, 'name', 'Player'))
+                    t_name = safe_escape(getattr(win_cap, 'team_name', 'Team'))
+                    reject_msg = (
+                        f"❌ <b>RTM REJECTED BY HOST!</b>\n\n"
+                        f"👤 <b>{p_name}</b> officially SOLD to <b>{t_name}</b> for {format_amount(amount)}!\n"
+                        f"💳 <b>Remaining Purse:</b> {format_amount(getattr(win_cap, 'purse', 0))}"
+                    )
+                    await edit_auction_message(query, reject_msg)
+                await advance_to_next_player(auction, context)
+                return
+            
+            # 4. Host Approves RTM -> Prompt Winning Team for Final Bid
+            elif action == "host" and parts[2] == "yes":
+                if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+                    await query.answer("⛔ Access Denied! Only the Auction Host or Bot Admin can decide RTM approval.", show_alert=True)
+                    return
+                
+                if getattr(auction, 'rtm_state', None) != "waiting_host_confirm":
+                    await query.answer("⚠️ This RTM decision has already been handled.", show_alert=True)
+                    return
+                
+                auction.rtm_state = "waiting_final_bid"
+                win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+                player = auction.rtm_player or auction.current_player
+                base_amt = auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+                
+                keyboard = [
+                    [
+                        InlineKeyboardButton(f"Keep Price ({format_amount(base_amt)})", callback_data=f"rtm_final_keep_{auction.id}")
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                t_name = safe_escape(getattr(win_cap, 'team_name', 'Winning Team')) if win_cap else 'Winning Team'
+                c_name = safe_escape(getattr(win_cap, 'name', 'Captain')) if win_cap else 'Captain'
+                p_name = safe_escape(getattr(player, 'name', 'Player')) if player else 'Player'
+                purse_val = format_amount(getattr(win_cap, 'purse', 0)) if win_cap else '0'
+                
+                prompt_msg = (
+                    f"✅ <b>RTM APPROVED BY HOST!</b>\n\n"
+                    f"👑 <b>{t_name}</b> ({c_name}):\n"
+                    f"You won {p_name} at {format_amount(base_amt)}.\n"
+                    f"You can now set your <b>FINAL BID</b> to challenge the RTM!\n"
+                    f"• Minimum: {format_amount(base_amt)}\n"
+                    f"• Maximum: {purse_val}\n\n"
+                    f"👉 <b>Winning Captain:</b> Click <b>[Keep Price]</b>, type <code>/keep</code>, or type your higher bid in chat!"
+                )
+                await edit_auction_message(query, prompt_msg, reply_markup=reply_markup)
+                return
+            
+            # 5. Winning Captain Keeps Current Price
+            elif action == "final" and parts[2] == "keep":
+                win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+                if not win_cap:
+                    await query.answer("❌ Error: Winning captain not found.", show_alert=True)
+                    return
+                if user.id != win_cap.user_id and auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+                    await query.answer(f"⛔ Access Denied! Only winning captain ({win_cap.team_name}) can set the final price.", show_alert=True)
+                    return
+                
+                if getattr(auction, 'rtm_state', None) != "waiting_final_bid":
+                    await query.answer("⚠️ Final bid has already been submitted.", show_alert=True)
+                    return
+                
+                auction.rtm_final_amount = auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+                auction.rtm_state = "waiting_rtm_match"
+                
+                rtm_cap = auction.rtm_captain
+                player = auction.rtm_player or auction.current_player
+                final_amt = auction.rtm_final_amount
+                
+                keyboard = [
+                    [
+                        InlineKeyboardButton(f"✅ Match ({format_amount(final_amt)})", callback_data=f"rtm_match_yes_{auction.id}"),
+                        InlineKeyboardButton("❌ Decline RTM", callback_data=f"rtm_match_no_{auction.id}")
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                w_team = safe_escape(getattr(win_cap, 'team_name', 'Winning Team'))
+                r_team = safe_escape(getattr(rtm_cap, 'team_name', 'RTM Team')) if rtm_cap else 'RTM Team'
+                r_name = safe_escape(getattr(rtm_cap, 'name', 'Captain')) if rtm_cap else 'Captain'
+                p_name = safe_escape(getattr(player, 'name', 'Player')) if player else 'Player'
+                
+                match_msg = (
+                    f"🥊 <b>FINAL BID SET: {format_amount(final_amt)}!</b>\n\n"
+                    f"👑 <b>{w_team}</b> decided to keep the final price at <b>{format_amount(final_amt)}</b>.\n\n"
+                    f"👑 <b>{r_team}</b> ({r_name}):\n"
+                    f"Do you want to <b>MATCH</b> this bid of {format_amount(final_amt)} to acquire {p_name}?\n\n"
+                    f"💡 Click below or type <code>/match</code> or <code>/pass</code>."
+                )
+                await edit_auction_message(query, match_msg, reply_markup=reply_markup)
+                return
+            
+            # 6. RTM Captain Matches Bid
+            elif action == "match" and parts[2] == "yes":
+                rtm_cap = auction.rtm_captain
+                if not rtm_cap:
+                    await query.answer("❌ Error: RTM captain not found.", show_alert=True)
+                    return
+                if user.id != rtm_cap.user_id and not bot_instance.is_admin(user.id):
+                    await query.answer(f"⛔ Access Denied! Only RTM captain ({rtm_cap.team_name}) can choose to match.", show_alert=True)
+                    return
+                
+                if getattr(auction, 'rtm_state', None) != "waiting_rtm_match":
+                    await query.answer("⚠️ RTM match decision has already been processed.", show_alert=True)
+                    return
+                
+                if getattr(rtm_cap, 'purse', 0) < auction.rtm_final_amount:
+                    await query.answer(f"❌ Insufficient purse! You have {format_amount(rtm_cap.purse)}, need {format_amount(auction.rtm_final_amount)}", show_alert=True)
+                    return
+                
+                player = auction.rtm_player or auction.current_player
+                final_amt = auction.rtm_final_amount
+                win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+                
+                finalize_player_sale(auction, player, rtm_cap, final_amt)
+                
+                p_name = safe_escape(getattr(player, 'name', 'Player'))
+                r_team = safe_escape(getattr(rtm_cap, 'team_name', 'RTM Team'))
+                w_team = safe_escape(getattr(win_cap, 'team_name', 'Winning Bidder')) if win_cap else 'Other Team'
+                w_purse = format_amount(getattr(win_cap, 'purse', 0)) if win_cap else '0'
+                
+                success_msg = (
+                    f"🎉 <b>RTM SUCCESSFUL!</b> 🎉\n\n"
+                    f"👤 <b>Player:</b> {p_name}\n"
+                    f"👑 <b>Acquired by:</b> {r_team} (Matched {format_amount(final_amt)})\n"
+                    f"💳 <b>Remaining Purse:</b> {format_amount(getattr(rtm_cap, 'purse', 0))}\n\n"
+                    f"👑 <b>{w_team}</b> purse untouched: {w_purse}"
+                )
+                await edit_auction_message(query, success_msg)
+                await advance_to_next_player(auction, context)
+                return
+            
+            # 7. RTM Captain Declines
+            elif action == "match" and parts[2] == "no":
+                rtm_cap = auction.rtm_captain
+                if not rtm_cap:
+                    await query.answer("❌ Error: RTM captain not found.", show_alert=True)
+                    return
+                if user.id != rtm_cap.user_id and not bot_instance.is_admin(user.id):
+                    await query.answer(f"⛔ Access Denied! Only RTM captain ({rtm_cap.team_name}) can decline.", show_alert=True)
+                    return
+                
+                if getattr(auction, 'rtm_state', None) != "waiting_rtm_match":
+                    await query.answer("⚠️ RTM match decision has already been processed.", show_alert=True)
+                    return
+                
+                player = auction.rtm_player or auction.current_player
+                final_amt = auction.rtm_final_amount or auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+                win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+                
+                if player and win_cap:
+                    finalize_player_sale(auction, player, win_cap, final_amt)
+                    p_name = safe_escape(getattr(player, 'name', 'Player'))
+                    w_team = safe_escape(getattr(win_cap, 'team_name', 'Winning Team'))
+                    decline_msg = (
+                        f"✅ <b>RTM DECLINED!</b>\n\n"
+                        f"👤 <b>Player:</b> {p_name}\n"
+                        f"👑 <b>Sold to:</b> {w_team}\n"
+                        f"💰 <b>Final Price:</b> {format_amount(final_amt)}\n"
+                        f"💳 <b>Remaining Purse:</b> {format_amount(getattr(win_cap, 'purse', 0))}"
+                    )
+                    await edit_auction_message(query, decline_msg)
+                await advance_to_next_player(auction, context)
+                return
+        finally:
+            auction._bid_lock.release()
+
+    except Exception as e:
+        logger.error(f"Error in handle_rtm_callback: {e}", exc_info=True)
+        try:
+            await query.answer("❌ An error occurred processing RTM!", show_alert=True)
+        except:
+            pass
+
+@check_banned
+@log_command("rtm")
+async def rtm_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Use Right To Match (RTM) on provisionally sold player"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    auction = None
+    if context.args:
+        try:
+            auction = bot_instance.get_approved_auction(int(context.args[0]))
+        except ValueError:
+            pass
+    if not auction:
+        for a in bot_instance.approved_auctions.values():
+            if a.group_chat_id == chat.id and a.status == "active":
+                auction = a
+                break
+    if not auction:
+        for a in bot_instance.approved_auctions.values():
+            if a.status == "active" and user.id in a.approved_captains:
+                auction = a
+                break
+    
+    if not auction:
+        await update.message.reply_text("❌ No active auction found!")
+        return
+    
+    lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=5)
+    if not lock_acquired:
+        await update.message.reply_text("⏳ Processing current auction actions, please retry...")
+        return
+    try:
+        await process_rtm_request(user, auction, context, reply_to_msg=update.message)
+    finally:
+        auction._bid_lock.release()
+
+@check_banned
+@log_command("approvertm")
+async def approvertm_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Host approves the RTM request via command"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    auction = None
+    if context.args:
+        try:
+            auction = bot_instance.get_approved_auction(int(context.args[0]))
+        except ValueError:
+            pass
+    if not auction:
+        for a in bot_instance.approved_auctions.values():
+            if a.group_chat_id == chat.id and a.status == "active":
+                auction = a
+                break
+    if not auction:
+        for a in bot_instance.approved_auctions.values():
+            if (a.creator_id == user.id or bot_instance.is_admin(user.id)) and a.status == "active":
+                auction = a
+                break
+    
+    if not auction:
+        await update.message.reply_text("❌ No active auction found!")
+        return
+    
+    if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+        await update.message.reply_text("❌ Only the auction host or admin can approve RTM!")
+        return
+        
+    if getattr(auction, 'rtm_state', None) != "waiting_host_confirm":
+        await update.message.reply_text("❌ Not currently awaiting host RTM approval!")
+        return
+        
+    lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=5)
+    if not lock_acquired:
+        await update.message.reply_text("⏳ Processing auction actions, please retry...")
+        return
+        
+    try:
+        auction.rtm_state = "waiting_final_bid"
+        win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+        player = auction.rtm_player or auction.current_player
+        base_amt = auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton(f"Keep Price ({format_amount(base_amt)})", callback_data=f"rtm_final_keep_{auction.id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        t_name = safe_escape(getattr(win_cap, 'team_name', 'Winning Team')) if win_cap else 'Winning Team'
+        c_name = safe_escape(getattr(win_cap, 'name', 'Captain')) if win_cap else 'Captain'
+        p_name = safe_escape(getattr(player, 'name', 'Player')) if player else 'Player'
+        purse_val = format_amount(getattr(win_cap, 'purse', 0)) if win_cap else '0'
+        
+        prompt_msg = (
+            f"✅ <b>RTM APPROVED BY HOST!</b>\n\n"
+            f"👑 <b>{t_name}</b> ({c_name}):\n"
+            f"You won {p_name} at {format_amount(base_amt)}.\n"
+            f"You can now set your <b>FINAL BID</b> to challenge the RTM!\n"
+            f"• Minimum: {format_amount(base_amt)}\n"
+            f"• Maximum: {purse_val}\n\n"
+            f"👉 <b>Winning Captain:</b> Click <b>[Keep Price]</b>, type <code>/keep</code>, or type your higher bid in chat!"
+        )
+        target_chat = auction.group_chat_id or chat.id
+        await send_auction_message(context.bot, target_chat, prompt_msg, reply_markup=reply_markup)
+    finally:
+        auction._bid_lock.release()
+
+@check_banned
+@log_command("rejectrtm")
+async def rejectrtm_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Host rejects the RTM request via command"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    auction = None
+    if context.args:
+        try:
+            auction = bot_instance.get_approved_auction(int(context.args[0]))
+        except ValueError:
+            pass
+    if not auction:
+        for a in bot_instance.approved_auctions.values():
+            if a.group_chat_id == chat.id and a.status == "active":
+                auction = a
+                break
+    if not auction:
+        for a in bot_instance.approved_auctions.values():
+            if (a.creator_id == user.id or bot_instance.is_admin(user.id)) and a.status == "active":
+                auction = a
+                break
+    
+    if not auction:
+        await update.message.reply_text("❌ No active auction found!")
+        return
+    
+    if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+        await update.message.reply_text("❌ Only the auction host or admin can reject RTM!")
+        return
+        
+    if getattr(auction, 'rtm_state', None) != "waiting_host_confirm":
+        await update.message.reply_text("❌ Not currently awaiting host RTM approval!")
+        return
+        
+    lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=5)
+    if not lock_acquired:
+        await update.message.reply_text("⏳ Processing auction actions, please retry...")
+        return
+        
+    try:
+        win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+        player = auction.rtm_player or auction.current_player
+        amount = auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+        
+        if player and win_cap:
+            finalize_player_sale(auction, player, win_cap, amount)
+            p_name = safe_escape(getattr(player, 'name', 'Player'))
+            t_name = safe_escape(getattr(win_cap, 'team_name', 'Team'))
+            reject_msg = (
+                f"❌ <b>RTM REJECTED BY HOST!</b>\n\n"
+                f"👤 <b>{p_name}</b> officially SOLD to <b>{t_name}</b> for {format_amount(amount)}!\n"
+                f"💳 <b>Remaining Purse:</b> {format_amount(getattr(win_cap, 'purse', 0))}"
+            )
+            target_chat = auction.group_chat_id or chat.id
+            await send_auction_message(context.bot, target_chat, reject_msg)
+        await advance_to_next_player(auction, context, target_chat_id=auction.group_chat_id or chat.id)
+    finally:
+        auction._bid_lock.release()
+
+@check_banned
+@log_command("keep")
+async def keep_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Winning captain keeps current price as final bid"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    auction = None
+    for a in bot_instance.approved_auctions.values():
+        if (a.group_chat_id == chat.id or (getattr(a, 'rtm_winning_captain', None) and a.rtm_winning_captain.user_id == user.id)) and a.status == "active":
+            auction = a
+            break
+            
+    if not auction or getattr(auction, 'rtm_state', None) != "waiting_final_bid":
+        await update.message.reply_text("❌ Not currently waiting for a final bid!")
+        return
+        
+    win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+    if not win_cap:
+        await update.message.reply_text("❌ Winning captain not found!")
+        return
+        
+    if user.id != win_cap.user_id and auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+        await update.message.reply_text(f"❌ Only the winning captain ({win_cap.team_name}) can set the final price!")
+        return
+        
+    lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=5)
+    if not lock_acquired:
+        await update.message.reply_text("⏳ Processing auction actions, please retry...")
+        return
+        
+    try:
+        auction.rtm_final_amount = auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+        auction.rtm_state = "waiting_rtm_match"
+        
+        rtm_cap = auction.rtm_captain
+        player = auction.rtm_player or auction.current_player
+        final_amt = auction.rtm_final_amount
+        
+        keyboard = [
+            [
+                InlineKeyboardButton(f"✅ Match ({format_amount(final_amt)})", callback_data=f"rtm_match_yes_{auction.id}"),
+                InlineKeyboardButton("❌ Decline RTM", callback_data=f"rtm_match_no_{auction.id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        w_team = safe_escape(getattr(win_cap, 'team_name', 'Winning Team'))
+        r_team = safe_escape(getattr(rtm_cap, 'team_name', 'RTM Team')) if rtm_cap else 'RTM Team'
+        r_name = safe_escape(getattr(rtm_cap, 'name', 'Captain')) if rtm_cap else 'Captain'
+        p_name = safe_escape(getattr(player, 'name', 'Player')) if player else 'Player'
+        
+        match_msg = (
+            f"🥊 <b>FINAL BID SET: {format_amount(final_amt)}!</b>\n\n"
+            f"👑 <b>{w_team}</b> decided to keep the final price at <b>{format_amount(final_amt)}</b>.\n\n"
+            f"👑 <b>{r_team}</b> ({r_name}):\n"
+            f"Do you want to <b>MATCH</b> this bid of {format_amount(final_amt)} to acquire {p_name}?\n\n"
+            f"💡 Type <code>/match</code> to acquire, or <code>/pass</code> to decline (or use the buttons below)."
+        )
+        target_chat = auction.group_chat_id or chat.id
+        await send_auction_message(context.bot, target_chat, match_msg, reply_markup=reply_markup)
+    finally:
+        auction._bid_lock.release()
+
+@check_banned
+@log_command("match")
+async def match_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Match the final bid as RTM captain"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    auction = None
+    for a in bot_instance.approved_auctions.values():
+        if (a.group_chat_id == chat.id or (getattr(a, 'rtm_captain', None) and a.rtm_captain.user_id == user.id)) and a.status == "active":
+            auction = a
+            break
+    
+    if not auction or getattr(auction, 'rtm_state', None) != "waiting_rtm_match":
+        await update.message.reply_text("❌ Not currently waiting for an RTM match decision!")
+        return
+    
+    rtm_cap = auction.rtm_captain
+    if not rtm_cap:
+        await update.message.reply_text("❌ RTM captain not found!")
+        return
+        
+    if user.id != rtm_cap.user_id and not bot_instance.is_admin(user.id):
+        await update.message.reply_text(f"❌ Only the RTM captain ({rtm_cap.team_name}) can choose to match!")
+        return
+    
+    if getattr(rtm_cap, 'purse', 0) < auction.rtm_final_amount:
+        await update.message.reply_text(f"❌ Insufficient purse ({format_amount(rtm_cap.purse)}) to match {format_amount(auction.rtm_final_amount)}!")
+        return
+    
+    lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=5)
+    if not lock_acquired:
+        await update.message.reply_text("⏳ Processing auction actions, please retry...")
+        return
+        
+    try:
+        player = auction.rtm_player or auction.current_player
+        final_amt = auction.rtm_final_amount
+        win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+        
+        finalize_player_sale(auction, player, rtm_cap, final_amt)
+        
+        p_name = safe_escape(getattr(player, 'name', 'Player'))
+        r_team = safe_escape(getattr(rtm_cap, 'team_name', 'RTM Team'))
+        w_team = safe_escape(getattr(win_cap, 'team_name', 'Winning Bidder')) if win_cap else 'Other Team'
+        w_purse = format_amount(getattr(win_cap, 'purse', 0)) if win_cap else '0'
+        
+        success_msg = (
+            f"🎉 <b>RTM SUCCESSFUL!</b> 🎉\n\n"
+            f"👤 <b>Player:</b> {p_name}\n"
+            f"👑 <b>Acquired by:</b> {r_team} (Matched {format_amount(final_amt)})\n"
+            f"💳 <b>Remaining Purse:</b> {format_amount(getattr(rtm_cap, 'purse', 0))}\n\n"
+            f"👑 <b>{w_team}</b> purse untouched: {w_purse}"
+        )
+        target_chat = auction.group_chat_id or chat.id
+        await send_auction_message(context.bot, target_chat, success_msg)
+        await advance_to_next_player(auction, context, target_chat_id=target_chat)
+    finally:
+        auction._bid_lock.release()
+
+@check_banned
+@log_command("pass")
+async def pass_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Decline to match the final bid as RTM captain"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    auction = None
+    for a in bot_instance.approved_auctions.values():
+        if (a.group_chat_id == chat.id or (getattr(a, 'rtm_captain', None) and a.rtm_captain.user_id == user.id)) and a.status == "active":
+            auction = a
+            break
+    
+    if not auction or getattr(auction, 'rtm_state', None) != "waiting_rtm_match":
+        await update.message.reply_text("❌ Not currently waiting for an RTM decision!")
+        return
+    
+    rtm_cap = auction.rtm_captain
+    if not rtm_cap:
+        await update.message.reply_text("❌ RTM captain not found!")
+        return
+        
+    if user.id != rtm_cap.user_id and not bot_instance.is_admin(user.id):
+        await update.message.reply_text(f"❌ Only the RTM captain ({rtm_cap.team_name}) can decline!")
+        return
+    
+    lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=5)
+    if not lock_acquired:
+        await update.message.reply_text("⏳ Processing auction actions, please retry...")
+        return
+        
+    try:
+        player = auction.rtm_player or auction.current_player
+        final_amt = auction.rtm_final_amount or auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+        win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+        
+        if player and win_cap:
+            finalize_player_sale(auction, player, win_cap, final_amt)
+            p_name = safe_escape(getattr(player, 'name', 'Player'))
+            w_team = safe_escape(getattr(win_cap, 'team_name', 'Winning Team'))
+            decline_msg = (
+                f"✅ <b>RTM DECLINED!</b>\n\n"
+                f"👤 <b>Player:</b> {p_name}\n"
+                f"👑 <b>Sold to:</b> {w_team}\n"
+                f"💰 <b>Final Price:</b> {format_amount(final_amt)}\n"
+                f"💳 <b>Remaining Purse:</b> {format_amount(getattr(win_cap, 'purse', 0))}"
+            )
+            target_chat = auction.group_chat_id or chat.id
+            await send_auction_message(context.bot, target_chat, decline_msg)
+        await advance_to_next_player(auction, context, target_chat_id=auction.group_chat_id or chat.id)
+    finally:
+        auction._bid_lock.release()
+
+@check_banned
+@log_command("next")
+async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Advance to the next player (or finalize provisional sale if in any RTM window)"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    auction = None
+    if context.args:
+        try:
+            auction = bot_instance.get_approved_auction(int(context.args[0]))
+        except ValueError:
+            pass
+    if not auction:
+        for a in bot_instance.approved_auctions.values():
+            if a.group_chat_id == chat.id and a.status == "active":
+                auction = a
+                break
+    if not auction:
+        for a in bot_instance.approved_auctions.values():
+            if (a.creator_id == user.id or bot_instance.is_admin(user.id)) and a.status == "active":
+                auction = a
+                break
+    
+    if not auction:
+        await update.message.reply_text("❌ No active auction found!")
+        return
+    
+    if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+        await update.message.reply_text("❌ Only the auction host or admin can move to the next player!")
+        return
+    
+    lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=5)
+    if not lock_acquired:
+        await update.message.reply_text("⏳ Processing auction actions, please retry...")
+        return
+        
+    try:
+        # If in ANY RTM state, finalize to winning captain first
+        if getattr(auction, 'rtm_state', None) is not None:
+            win_cap = auction.rtm_winning_captain or (auction.approved_captains.get(auction.highest_bidder) if auction.highest_bidder else None)
+            player = auction.rtm_player or auction.current_player
+            amount = auction.rtm_final_amount or auction.rtm_base_amount or getattr(auction, 'highest_bid', 1)
+            if player and win_cap:
+                finalize_player_sale(auction, player, win_cap, amount)
+                p_name = safe_escape(getattr(player, 'name', 'Player'))
+                t_name = safe_escape(getattr(win_cap, 'team_name', 'Team'))
+                skip_msg = f"✅ <b>{p_name}</b> officially sold to <b>{t_name}</b> for {format_amount(amount)} (RTM ended by host)."
+                target_chat = auction.group_chat_id or chat.id
+                await send_auction_message(context.bot, target_chat, skip_msg)
+        
+        await advance_to_next_player(auction, context, target_chat_id=auction.group_chat_id or chat.id)
+    finally:
+        auction._bid_lock.release()
 
 async def handle_player_approval_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle player approve/reject callbacks"""
@@ -17035,7 +18029,7 @@ async def handle_player_approval_callbacks(update: Update, context: ContextTypes
         
         auction = bot_instance.get_approved_auction(auction_id)
         if not auction or (auction.creator_id != user.id and not bot_instance.is_admin(user.id)):
-            await query.edit_message_text("❌ Access denied!")
+            await query.answer("⛔ Access Denied! Only auction host or admin can approve/reject players.", show_alert=True)
             return
         
         if data.startswith("approve_player_"):
@@ -17461,78 +18455,82 @@ async def auctionhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"• Wait for admin approval\n\n"
             
             f"<b>2️⃣ Host Panel:</b>\n"
-            f"• <code>/hostpanel [id]</code> - Access host controls\n"
-            f"• Manage registrations and start auction\n\n"
+            f"• <code>/hostpanel [id]</code> - Interactive host control dashboard\n"
+            f"• Manage registrations, approvals, and start live auction\n\n"
             
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"👑 <b>CAPTAIN COMMANDS</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             
             f"<b>Registration:</b>\n"
-            f"• <code>/regcap [id] [team_name]</code> - Register as team captain\n"
-            f"• Wait for host approval\n\n"
+            f"• <code>/regcap [id] [team_name]</code> - Register as team captain\n\n"
             
-            f"<b>During Auction:</b>\n"
-            f"• Type amount to bid in group chat (e.g., <code>5</code> for 5Cr)\n"
+            f"<b>Live Bidding:</b>\n"
+            f"• Type bid amount in chat (e.g. <code>2</code>, <code>2.5</code>, <code>5cr</code>)\n"
+            f"• First bid can start directly at player's <b>Base Price</b>!\n"
+            f"• Subsequent bids increase by at least 0.5Cr\n"
             f"• <code>/out</code> or <code>/out [id]</code> - Opt out of current player's bidding\n"
-            f"• <code>/myteam</code> - View your team's purchased players\n"
+            f"• <code>/myteam</code> - View your squad and purchased players\n"
             f"• <code>/purse</code> - Check remaining budget and team stats\n"
-            f"• <code>/transfercap [id] [@username]</code> - Transfer captaincy to someone else\n\n"
+            f"• <code>/transfercap [id] [@username]</code> - Transfer captaincy\n\n"
+            
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔄 <b>RTM (RIGHT TO MATCH) SYSTEM</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            f"When a player is provisionally sold, the RTM window opens:\n\n"
+            f"<b>1. Claim RTM:</b>\n"
+            f"• <code>/rtm</code> (or click <b>[🔄 Use RTM]</b>) - Eligible captain claims RTM\n\n"
+            f"<b>2. Host Approval:</b>\n"
+            f"• <code>/approvertm</code> or <code>/rtmyes</code> - Host approves RTM claim\n"
+            f"• <code>/rejectrtm</code> or <code>/rtmno</code> - Host rejects RTM claim\n\n"
+            f"<b>3. Final Challenge Bid (Winning Captain):</b>\n"
+            f"• <code>/keep</code> (or click <b>[Keep Price]</b>) - Keep sold price as final challenge\n"
+            f"• Or type a higher amount in chat to challenge RTM\n\n"
+            f"<b>4. Decision (RTM Captain):</b>\n"
+            f"• <code>/match</code> (or click <b>[✅ Match]</b>) - Match final price & acquire player\n"
+            f"• <code>/pass</code> (or click <b>[❌ Decline]</b>) - Decline match (player goes to winner)\n\n"
+            f"<b>5. Host Skip / Advance:</b>\n"
+            f"• <code>/next</code>, <code>/skiprtm</code>, or <code>/nortm</code> - Skip RTM & advance player\n\n"
             
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"👥 <b>PLAYER COMMANDS</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             
-            f"• <code>/regplay [id]</code> - Register as a player for an auction\n"
-            f"• Wait for host approval to join auction pool\n\n"
+            f"• <code>/regplay [id]</code> - Register as player for an auction\n"
+            f"• Sequential queue: players appear in registration sequence (1, 2, 3...)\n\n"
             
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🔧 <b>MANAGEMENT COMMANDS</b>\n"
+            f"🔧 <b>HOST & ADMIN CONTROLS</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             
-            f"<b>Information:</b>\n"
-            f"• <code>/participants [id]</code> - View all registered participants\n"
-            f"• <code>/status [id]</code> - Check live auction bidding status\n"
-            f"• <code>/listauc</code> - List all auctions (Admin/Host)\n"
-            f"• <code>/pending</code> - View pending proposals (Admin)\n\n"
+            f"<b>Auction Execution:</b>\n"
+            f"• <code>..</code> - Host/Admin shortcut in chat to trigger sale confirmation\n"
+            f"• <code>/pause</code>, <code>/resume</code>, or <code>/pauseauc [id]</code> - Pause or resume bidding\n"
+            f"• <code>/next</code> - Advance to next player in queue\n"
+            f"• <code>/rebid [id] [username]</code> - Bring back a player for re-bidding\n"
+            f"• <code>/unsold [id] [username] [team] [amount]</code> - Assign unsold player\n"
+            f"• <code>/endauc [id]</code> - Force finish active auction\n\n"
             
-            f"<b>Group Chat Setup:</b>\n"
-            f"• <code>/setgc [id] [chat_id]</code> - Link group chat for live bidding notifications\n\n"
-            
-            f"<b>Admin / Host Controls:</b>\n"
-            f"• <code>/delauc [id]</code> - Delete an auction proposal\n"
-            f"• <code>/endauc [id]</code> - Force complete an active auction\n"
-            f"• <code>/pauseauc [id]</code> - Pause or resume live bidding\n"
-            f"• <code>/rebid [id] [username]</code> - Rebid a player (sold or unsold)\n"
-            f"• <code>/unsold [id] [username] [team_name] [amount]</code> - Manually assign unsold player\n"
+            f"<b>Pool & Setup:</b>\n"
+            f"• <code>/setgc [id] [chat_id]</code> - Bind auction to group chat\n"
             f"• <code>/addpt [id] [username/id]</code> - Direct force-add player to pool\n"
-            f"• <code>/addpauc [id]</code> - Bulk add players (reply to username list)\n"
-            f"• <code>/removepauc [id]</code> - Bulk remove players (reply to username list)\n\n"
+            f"• <code>/addpauc [id]</code> - Bulk add players (reply to usernames)\n"
+            f"• <code>/removepauc [id]</code> - Bulk remove players (reply to usernames)\n"
+            f"• <code>/delauc [id]</code> - Delete an auction proposal\n"
+            f"• <code>/listauc</code> - List all auctions (Admin/Host)\n"
+            f"• <code>/pending</code> - View pending proposals (Admin)\n"
+            f"• <code>/participants [id]</code> - View all registered participants\n"
+            f"• <code>/status [id]</code> - Check live auction bidding status\n\n"
             
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 <b>AUCTION FLOW</b>\n"
+            f"🛡️ <b>SAFETY & BUTTON LOCKS</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             
-            f"<b>Step 1:</b> Create auction with /register\n"
-            f"<b>Step 2:</b> Admin approves proposal\n"
-            f"<b>Step 3:</b> Host starts captain registration\n"
-            f"<b>Step 4:</b> Captains register for teams\n"
-            f"<b>Step 5:</b> Host approves captains\n"
-            f"<b>Step 6:</b> Host starts player registration\n"
-            f"<b>Step 7:</b> Players register for auction\n"
-            f"<b>Step 8:</b> Host approves players\n"
-            f"<b>Step 9:</b> Host starts live auction\n"
-            f"<b>Step 10:</b> Captains bid on players\n\n"
-            
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💡 <b>PRO TIPS</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            
-            f"• Set up group chat with /setgc for live updates\n"
-            f"• Use host panel for easy management\n"
-            f"• Players get 10-second countdown during auction\n"
-            f"• All auction data is saved across bot restarts\n"
-            f"• Captains can view team and budget anytime\n\n"
+            f"• All auction buttons have strict role authorization locks.\n"
+            f"• Unauthorized clicks show private alerts without disrupting chat.\n"
+            f"• Race conditions are prevented with thread locks.\n"
+            f"• All steps can be completed via buttons OR chat commands!\n\n"
             
             f"🆘 <b>Need help?</b> Contact admins or use /help for general bot commands!"
         )
@@ -17676,6 +18674,14 @@ async def rebid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             auction.highest_bid = getattr(current_player, 'base_price', auction.base_price)
             if hasattr(auction, 'current_bids'):
                 auction.current_bids = {}
+            
+            # Reset RTM attributes for fresh bidding
+            auction.rtm_state = None
+            auction.rtm_player = None
+            auction.rtm_winning_captain = None
+            auction.rtm_captain = None
+            auction.rtm_base_amount = 0
+            auction.rtm_final_amount = 0
                 
             # Remove from sold_players if marked sold/unsold (allows re-auction)
             if hasattr(auction, 'sold_players') and current_player.user_id in auction.sold_players:
@@ -17683,25 +18689,24 @@ async def rebid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 logger.info(f"Removed {current_player.name} from sold_players for rebid")
                 
             username_display = f"@{current_player.username}" if hasattr(current_player, 'username') and current_player.username else ""
+            p_name = html.escape(str(getattr(current_player, 'name', 'Player')))
+            base_val = format_amount(getattr(current_player, 'base_price', auction.base_price))
+            
             rebid_message = (
                 f"🔄 <b>REBID STARTED!</b>\n\n"
-                f"👤 <b>{current_player.name}</b> {username_display}\n"
-                f"💎 <b>Base:</b> {format_amount(current_player.base_price)}\n\n"
+                f"👤 <b>{p_name}</b> {html.escape(username_display)}\n"
+                f"💎 <b>Base:</b> {base_val}\n\n"
                 f"🎯 <b>Fresh start - Type amount to bid!</b>\n"
                 f"📝 Admin: Reply '..' or use /sell {auction_id} to sell"
             )
             
-            await update.message.reply_text(rebid_message, parse_mode='HTML')
+            try:
+                await update.message.reply_text(rebid_message, parse_mode='HTML')
+            except Exception:
+                await update.message.reply_text(f"🔄 REBID STARTED!\n\n👤 {getattr(current_player, 'name', 'Player')} {username_display}\n💎 Base: {base_val}\n\nType amount to bid!")
             
             if auction.group_chat_id and auction.group_chat_id != update.effective_chat.id:
-                try:
-                    await context.bot.send_message(
-                        chat_id=auction.group_chat_id,
-                        text=rebid_message,
-                        parse_mode='HTML'
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send rebid notification to group: {e}")
+                await send_auction_message(context.bot, auction.group_chat_id, rebid_message)
             return
             
         # Case 2: Bring back player by username
@@ -17709,26 +18714,32 @@ async def rebid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         success, message_text, player = bot_instance.rebid_player(auction_id, player_username)
         
         if success:
+            auction.rtm_state = None
+            auction.rtm_player = None
+            auction.rtm_winning_captain = None
+            auction.rtm_captain = None
+            auction.rtm_base_amount = 0
+            auction.rtm_final_amount = 0
+            
             current_player = auction.current_player
             username_display = f"@{current_player.username}" if hasattr(current_player, 'username') and current_player.username else ""
+            p_name = html.escape(str(getattr(current_player, 'name', 'Player')))
+            base_val = format_amount(getattr(current_player, 'base_price', auction.base_price))
+            
             message = (
                 f"🔄 <b>PLAYER BROUGHT BACK FOR REBIDDING!</b>\n\n"
-                f"👤 <b>Player:</b> {current_player.name} {username_display}\n"
-                f"💎 <b>Base Price:</b> {format_amount(current_player.base_price)}\n\n"
+                f"👤 <b>Player:</b> {p_name} {html.escape(username_display)}\n"
+                f"💎 <b>Base Price:</b> {base_val}\n\n"
                 f"🎯 <b>Captains, place your bids now!</b>"
             )
             
-            await update.message.reply_text(message, parse_mode='HTML')
+            try:
+                await update.message.reply_text(message, parse_mode='HTML')
+            except Exception:
+                await update.message.reply_text(f"🔄 PLAYER BROUGHT BACK FOR REBIDDING!\n\n👤 {getattr(current_player, 'name', 'Player')} {username_display}\n💎 Base Price: {base_val}\n\nCaptains, place your bids now!")
             
             if auction.group_chat_id and auction.group_chat_id != update.effective_chat.id:
-                try:
-                    await context.bot.send_message(
-                        chat_id=auction.group_chat_id,
-                        text=message,
-                        parse_mode='HTML'
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send group notification: {e}")
+                await send_auction_message(context.bot, auction.group_chat_id, message)
         else:
             await update.message.reply_text(f"❌ {message_text}")
             
@@ -18072,31 +19083,41 @@ async def pauseauc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Pause or resume an active auction"""
     try:
         user = update.effective_user
+        chat = update.effective_chat
         
-        if len(context.args) < 1:
-            await update.message.reply_text(
-                "❌ <b>Usage:</b> <code>/pauseauc [auction_id]</code>\n\n"
-                "<b>Example:</b> <code>/pauseauc 5</code>",
-                parse_mode='HTML'
-            )
-            return
+        auction = None
+        if context.args:
+            try:
+                auction_id = int(context.args[0])
+                auction = bot_instance.get_approved_auction(auction_id)
+            except ValueError:
+                pass
         
-        auction_id = int(context.args[0])
-        auction = bot_instance.get_approved_auction(auction_id)
+        # Auto-detect auction if no ID was provided
+        if not auction:
+            for a in bot_instance.approved_auctions.values():
+                if a.group_chat_id == chat.id and a.status == "active":
+                    auction = a
+                    break
+        if not auction:
+            for a in bot_instance.approved_auctions.values():
+                if (a.creator_id == user.id or bot_instance.is_admin(user.id)) and a.status == "active":
+                    auction = a
+                    break
         
         if not auction:
-            await update.message.reply_text("❌ Auction not found!")
-            return
-        
-        if auction.status != "active":
-            await update.message.reply_text("❌ Auction is not active!")
+            await update.message.reply_text(
+                "❌ <b>No active auction found!</b>\n\n"
+                "<b>Usage:</b> <code>/pause [auction_id]</code>",
+                parse_mode='HTML'
+            )
             return
         
         if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
             await update.message.reply_text("❌ Only the auction host or admin can pause/resume!")
             return
         
-        success = bot_instance.pause_auction(auction_id)
+        success = bot_instance.pause_auction(auction.id)
         
         if success:
             status_text = "PAUSED" if auction.is_paused else "RESUMED"
@@ -18109,26 +19130,27 @@ async def pauseauc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             
             if auction.is_paused:
-                message += "⏸️ <b>Bidding is temporarily paused</b>\n💡 Use /pauseauc again to resume"
+                message += "⏸️ <b>Bidding is temporarily paused</b>\n💡 Use /pause or /resume again to continue"
             else:
                 message += "▶️ <b>Bidding has resumed!</b>\n🎯 Captains can continue bidding"
             
             await update.message.reply_text(message, parse_mode='HTML')
             
-            if auction.group_chat_id:
+            # If command was used in private chat, also inform the group
+            if auction.group_chat_id and chat.id != auction.group_chat_id:
                 try:
                     await context.bot.send_message(
                         chat_id=auction.group_chat_id,
                         text=message,
                         parse_mode='HTML'
                     )
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Could not notify group of pause state: {e}")
         else:
             await update.message.reply_text("❌ Failed to pause/resume auction!")
         
     except Exception as e:
-        logger.error(f"Error in pauseauc_command: {e}")
+        logger.error(f"Error in pauseauc_command: {e}", exc_info=True)
         await update.message.reply_text("❌ An error occurred!")
 
 # Duplicate rebid_command removed (merged with the first definition above)
@@ -18899,13 +19921,10 @@ def get_auction_info_message(auction: ApprovedAuction) -> str:
 # ====================================
 
 async def auction_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Route auction-related callbacks with timeout handling"""
+    """Route auction-related callbacks with timeout handling and non-destructive popups"""
     query = update.callback_query
     
     try:
-        # Answer immediately to prevent timeout
-        await query.answer()
-        
         data = query.data
         
         if data.startswith(("approve_auction_", "reject_auction_")):
@@ -18923,28 +19942,35 @@ async def auction_callback_router(update: Update, context: ContextTypes.DEFAULT_
             # Manual control only - no timer
         elif data.startswith("fjoin_"):
             await handle_force_join_callback(update, context)
+        elif data.startswith("rtm_"):
+            await handle_rtm_callback(update, context)
         else:
-            await query.edit_message_text(
-                f"❓ Unknown callback: {data}\n\nPlease try again or contact support.",
-                parse_mode='HTML'
-            )
+            try:
+                await query.answer(f"❓ Unknown callback: {data}", show_alert=True)
+            except Exception:
+                pass
+
+        # Ensure query is answered cleanly if not already handled with custom alert
+        try:
+            await query.answer()
+        except Exception:
+            pass
             
     except telegram_error.BadRequest as e:
-        if "query is too old" in str(e).lower() or "timeout" in str(e).lower():
-            logger.warning(f"Callback query timeout: {e}")
-            # Don't try to answer again, just log it
+        if "query is too old" in str(e).lower() or "timeout" in str(e).lower() or "already answered" in str(e).lower():
+            logger.warning(f"Callback query timeout/already answered: {e}")
             return
         else:
             logger.error(f"BadRequest in auction callback router: {e}")
             try:
-                await query.edit_message_text("❌ Request error. Please try again.")
-            except:
+                await query.answer("❌ Request error. Please try again.", show_alert=True)
+            except Exception:
                 pass
     except Exception as e:
         logger.error(f"Error in auction callback router: {e}")
         try:
-            await query.edit_message_text("❌ An error occurred! Please try again.")
-        except:
+            await query.answer("❌ An error occurred! Please try again.", show_alert=True)
+        except Exception:
             pass
 
 
@@ -20216,7 +21242,14 @@ def register_commands(application):
     # New auction management commands
     application.add_handler(CommandHandler("unsold", unsold_command))
     application.add_handler(CommandHandler("addpt", addpt_command))
-    application.add_handler(CommandHandler("pauseauc", pauseauc_command))
+    application.add_handler(CommandHandler(["pauseauc", "pause", "resume"], pauseauc_command))
+    application.add_handler(CommandHandler("rtm", rtm_command))
+    application.add_handler(CommandHandler(["approvertm", "rtmyes"], approvertm_command))
+    application.add_handler(CommandHandler(["rejectrtm", "rtmno"], rejectrtm_command))
+    application.add_handler(CommandHandler("keep", keep_command))
+    application.add_handler(CommandHandler("match", match_command))
+    application.add_handler(CommandHandler("pass", pass_command))
+    application.add_handler(CommandHandler(["next", "skiprtm", "nortm"], next_command))
     
     # ====================================
     # MAIN BOT COMMANDS
@@ -20318,7 +21351,7 @@ def register_commands(application):
     application.add_handler(CallbackQueryHandler(broadcast_callback, pattern="^broadcast_"))
     application.add_handler(CallbackQueryHandler(guess_callback, pattern="^guess_"))
     application.add_handler(CallbackQueryHandler(trivia_callback, pattern="^trivia_"))
-    application.add_handler(CallbackQueryHandler(auction_callback_router, pattern="^(approve_auction_|reject_auction_|host_|approve_player_|reject_player_|approve_captain_|reject_captain_|confirm_sale_|continue_bid_|start_bidding_|fjoin_)"))
+    application.add_handler(CallbackQueryHandler(auction_callback_router, pattern="^(approve_auction_|reject_auction_|host_|approve_player_|reject_player_|approve_captain_|reject_captain_|confirm_sale_|continue_bid_|start_bidding_|fjoin_|rtm_)"))
 
     
     # ====================================

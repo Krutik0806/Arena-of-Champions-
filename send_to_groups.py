@@ -5,8 +5,6 @@ import requests
 # Fix Windows console encoding
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-BOT_TOKEN = "8504828186:AAHcEo1ABoRmWukO4YXWCIjlE8jhpaVEs8Y"
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 MESSAGE = (
     "WARNING: If your Telegram display name contains "
