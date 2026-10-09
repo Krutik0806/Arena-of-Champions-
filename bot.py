@@ -5910,9 +5910,19 @@ class ArenaOfChampionsBot:
     def approve_auction_proposal(self, proposal_id: int, admin_id: int, admin_name: str) -> Optional[int]:
         """Approve a proposal and create approved auction"""
         if proposal_id not in self.auction_proposals:
+            # Check if this proposal was already approved
+            for aid, auction in self.approved_auctions.items():
+                if getattr(auction, 'proposal_id', None) == proposal_id or aid == proposal_id:
+                    return aid
             return None
         
         proposal = self.auction_proposals[proposal_id]
+        if proposal.status == "approved":
+            # Already approved, return existing auction ID if found
+            for aid, auction in self.approved_auctions.items():
+                if getattr(auction, 'proposal_id', None) == proposal_id or (auction.creator_id == proposal.creator_id and auction.name == proposal.name):
+                    return aid
+        
         proposal.status = "approved"
         proposal.admin_response_at = datetime.now()
         proposal.admin_id = admin_id
@@ -5922,6 +5932,7 @@ class ArenaOfChampionsBot:
         auction_id = self.auction_counter
         
         approved_auction = ApprovedAuction(auction_id, proposal)
+        approved_auction.proposal_id = proposal_id
         self.approved_auctions[auction_id] = approved_auction
         
         logger.info(f"Approved auction {auction_id} from proposal {proposal_id}")
@@ -12238,13 +12249,56 @@ async def shardlb_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.error(f"Error in shardlb command: {e}")
         await update.message.reply_text("❌ Error getting shard leaderboard!", parse_mode='HTML')
 
+@check_banned
+@log_command("adminpanel")
+async def adminpanel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Open Super Admin control panel"""
+    user = update.effective_user
+    if not bot_instance.is_super_admin(user.id) and not bot_instance.is_admin(user.id):
+        await update.message.reply_text("❌ <b>ACCESS DENIED!</b> Admin access required.", parse_mode='HTML')
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("📊 Bot Statistics", callback_data="panel_stats"),
+         InlineKeyboardButton("👥 User Management", callback_data="panel_users")],
+        [InlineKeyboardButton("💠 Economy Control", callback_data="panel_economy"),
+         InlineKeyboardButton("🎮 Game Management", callback_data="panel_games")],
+        [InlineKeyboardButton("🛡️ Admin Control", callback_data="panel_admins"),
+         InlineKeyboardButton("📢 Broadcasting", callback_data="panel_broadcast")],
+        [InlineKeyboardButton("🏆 Achievement System", callback_data="panel_achievements"),
+         InlineKeyboardButton("🔧 System Tools", callback_data="panel_system")]
+    ]
+
+    message = f"""👑 <b>SUPER ADMIN CONTROL PANEL</b> 🚀
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 <b>Arena Of Champions Management</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Welcome back!</b>
+Choose a management category below:
+
+📊 <b>Bot Statistics</b> - View comprehensive bot stats
+👥 <b>User Management</b> - Manage players and profiles  
+💠 <b>Economy Control</b> - Shard system management
+🎮 <b>Game Management</b> - Game stats and cleanup
+🛡️ <b>Admin Control</b> - Add/remove admin privileges
+📢 <b>Broadcasting</b> - Send messages to all users
+🏆 <b>Achievement System</b> - Bulk awards and titles
+🔧 <b>System Tools</b> - Database and system maintenance
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ <b>All bot functions at your fingertips!</b>"""
+
+    await update.message.reply_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+
 async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle admin panel button callbacks"""
     query = update.callback_query
     await query.answer()
     
-    if not bot_instance.is_super_admin(query.from_user.id):
-        await query.edit_message_text("❌ <b>ACCESS DENIED!</b> Only Super Admin can use this panel.", parse_mode='HTML')
+    if not bot_instance.is_super_admin(query.from_user.id) and not bot_instance.is_admin(query.from_user.id):
+        await query.answer("❌ ACCESS DENIED! Admin access required.", show_alert=True)
         return
     
     data = query.data
@@ -15999,9 +16053,9 @@ async def handle_force_join_callback(update, context) -> None:
     action = parts[1]          # 'yes' or 'no'
     target_user_id = int(parts[2])
 
-    # Only the auction creator who owns this state should interact
-    if query.from_user.id != target_user_id:
-        await query.answer("❌ This button is not for you!", show_alert=True)
+    # Allow target creator OR admin
+    if query.from_user.id != target_user_id and not bot_instance.is_admin(query.from_user.id):
+        await query.answer("❌ This button is for the auction creator!", show_alert=True)
         return
 
     if target_user_id not in bot_instance.registration_states:
@@ -16137,81 +16191,135 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
     try:
         query = update.callback_query
         user = query.from_user
-        
-        if not bot_instance.is_admin(user.id):
-            await query.edit_message_text("❌ Admin access required!")
-            return
-        
         data = query.data
+
+        # Answer callback immediately to eliminate loading spinner / button freeze
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+        proposal_id = None
+        if data.startswith(("approve_auction_", "reject_auction_")):
+            try:
+                proposal_id = int(data.split("_")[-1])
+            except (ValueError, IndexError):
+                proposal_id = None
+
+        proposal = bot_instance.auction_proposals.get(proposal_id) if proposal_id else None
+
+        # Check authorization: allow Bot Admins OR the Creator of the auction proposal
+        is_admin_user = bot_instance.is_admin(user.id)
+        is_creator = bool(proposal and proposal.creator_id == user.id)
+
+        if not is_admin_user and not is_creator:
+            await query.answer("❌ Only bot admins or the auction creator can approve/reject this proposal!", show_alert=True)
+            return
+
         if data.startswith("approve_auction_"):
-            proposal_id = int(data.split("_")[-1])
+            if not proposal_id:
+                await query.answer("❌ Invalid proposal ID!", show_alert=True)
+                return
+
             auction_id = bot_instance.approve_auction_proposal(proposal_id, user.id, user.full_name or user.first_name)
-            
+
             if auction_id:
-                proposal = bot_instance.auction_proposals[proposal_id]
-                
-                # Notify creator
-                try:
-                    await context.bot.send_message(
-                        chat_id=proposal.creator_id,
-                        text=f"🎉 <b>Your auction is approved!</b>\n\n"
-                             f"🏆 <b>Auction:</b> {proposal.name}\n"
-                             f"🆔 <b>Auction ID:</b> {auction_id}\n\n"
-                             f"🎮 Use <code>/hostpanel {auction_id}</code> to control everything!",
-                        parse_mode='HTML'
-                    )
-                except:
-                    pass
-                
+                prop_name = proposal.name if proposal else f"Auction #{auction_id}"
+                creator_name = proposal.creator_name if proposal else "Organizer"
+                creator_id = proposal.creator_id if proposal else user.id
+
+                # Notify creator if approver is someone else
+                if creator_id != user.id:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=creator_id,
+                            text=f"🎉 <b>Your auction is approved!</b>\n\n"
+                                 f"🏆 <b>Auction:</b> {prop_name}\n"
+                                 f"🆔 <b>Auction ID:</b> {auction_id}\n\n"
+                                 f"🎮 Use <code>/hostpanel {auction_id}</code> to control everything!",
+                            parse_mode='HTML'
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not notify creator {creator_id}: {e}")
+
                 # Update admin message
                 await query.edit_message_text(
                     text=f"✅ <b>APPROVED</b> by {user.first_name}\n\n"
-                         f"🏆 <b>Auction:</b> {proposal.name}\n"
-                         f"👤 <b>Creator:</b> {proposal.creator_name}\n"
+                         f"🏆 <b>Auction:</b> {prop_name}\n"
+                         f"👤 <b>Creator:</b> {creator_name}\n"
                          f"🆔 <b>Auction ID:</b> {auction_id}\n"
-                         f"⏰ <b>Approved:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                         f"⏰ <b>Approved:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                         f"🎮 <b>Next:</b> Use <code>/hostpanel {auction_id}</code> to manage the auction!",
                     parse_mode='HTML'
                 )
-                
+            else:
+                # Check if already approved
+                already_approved_id = None
+                for aid, a in bot_instance.approved_auctions.items():
+                    if getattr(a, 'proposal_id', None) == proposal_id or aid == proposal_id:
+                        already_approved_id = aid
+                        break
+
+                if already_approved_id:
+                    await query.answer(f"⚠️ Already approved as Auction #{already_approved_id}!", show_alert=True)
+                    try:
+                        await query.edit_message_text(
+                            text=f"✅ <b>ALREADY APPROVED</b>\n\n"
+                                 f"🆔 <b>Auction ID:</b> {already_approved_id}\n\n"
+                                 f"🎮 Use <code>/hostpanel {already_approved_id}</code> to control the auction.",
+                            parse_mode='HTML'
+                        )
+                    except Exception:
+                        pass
+                else:
+                    await query.answer("⚠️ Proposal expired or not found. Create a new one with /register.", show_alert=True)
+
         elif data.startswith("reject_auction_"):
-            proposal_id = int(data.split("_")[-1])
+            if not proposal_id:
+                await query.answer("❌ Invalid proposal ID!", show_alert=True)
+                return
+
             bot_instance.reject_auction_proposal(proposal_id, user.id, user.full_name or user.first_name)
-            
-            if proposal_id in bot_instance.auction_proposals:
-                proposal = bot_instance.auction_proposals[proposal_id]
-                
-                # Notify creator
+
+            prop_name = proposal.name if proposal else f"Proposal #{proposal_id}"
+            creator_name = proposal.creator_name if proposal else "Organizer"
+            creator_id = proposal.creator_id if proposal else None
+
+            if creator_id and creator_id != user.id:
                 try:
                     await context.bot.send_message(
-                        chat_id=proposal.creator_id,
+                        chat_id=creator_id,
                         text=f"❌ <b>Your auction proposal was rejected</b>\n\n"
-                             f"🏆 <b>Auction:</b> {proposal.name}\n\n"
+                             f"🏆 <b>Auction:</b> {prop_name}\n\n"
                              f"You can create a new proposal with <code>/register</code>",
                         parse_mode='HTML'
                     )
-                except:
+                except Exception:
                     pass
-                
-                # Update admin message
-                await query.edit_message_text(
-                    text=f"❌ <b>REJECTED</b> by {user.first_name}\n\n"
-                         f"🏆 <b>Auction:</b> {proposal.name}\n"
-                         f"👤 <b>Creator:</b> {proposal.creator_name}\n"
-                         f"⏰ <b>Rejected:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                    parse_mode='HTML'
-                )
-        
+
+            await query.edit_message_text(
+                text=f"❌ <b>REJECTED</b> by {user.first_name}\n\n"
+                     f"🏆 <b>Auction:</b> {prop_name}\n"
+                     f"👤 <b>Creator:</b> {creator_name}\n"
+                     f"⏰ <b>Rejected:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                parse_mode='HTML'
+            )
+
     except telegram_error.BadRequest as e:
-        if "query is too old" in str(e).lower() or "timeout" in str(e).lower():
-            logger.warning(f"Admin approval callback timeout: {e}")
+        if "query is too old" in str(e).lower() or "timeout" in str(e).lower() or "message is not modified" in str(e).lower():
+            logger.warning(f"Admin approval callback benign error: {e}")
             return
         else:
             logger.error(f"BadRequest in admin auction approval: {e}")
+            try:
+                await query.answer("❌ Telegram request error. Please try again.", show_alert=True)
+            except Exception:
+                pass
     except Exception as e:
-        logger.error(f"Error in admin auction approval: {e}")
+        logger.error(f"Error in admin auction approval: {e}", exc_info=True)
         try:
-            await query.edit_message_text("❌ An error occurred! Please try again.")
-        except:
+            await query.answer("❌ An error occurred! Please try again.", show_alert=True)
+        except Exception:
             pass
 
 # ====================================
@@ -17021,8 +17129,8 @@ async def handle_auction_sale_callbacks(update: Update, context: ContextTypes.DE
                 await query.answer("⛔ Access Denied! Only the Auction Host or Bot Admin can confirm sales.", show_alert=True)
                 return
             
-            # Prevent race condition with proper lock
-            lock_acquired = auction._bid_lock.acquire(blocking=False)
+            # Prevent race condition with proper lock (timeout 3s)
+            lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=3)
             if not lock_acquired:
                 await query.answer("⏳ Sale already being processed, please wait!", show_alert=True)
                 return
@@ -17380,8 +17488,8 @@ async def handle_rtm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.answer("❌ Auction not found!", show_alert=True)
             return
             
-        # Prevent concurrent button presses with lock
-        lock_acquired = auction._bid_lock.acquire(blocking=False)
+        # Prevent concurrent button presses with lock (timeout 3s)
+        lock_acquired = auction._bid_lock.acquire(blocking=True, timeout=3)
         if not lock_acquired:
             await query.answer("⏳ Another action is currently processing, please try again in a moment.", show_alert=True)
             return
@@ -21322,6 +21430,7 @@ def register_commands(application):
     application.add_handler(CommandHandler("cleanupchase", cleanup_chase_command))
     application.add_handler(CommandHandler("cleanupguess", cleanup_guess_command))
     application.add_handler(CommandHandler("adminstatus", admin_status_command))
+    application.add_handler(CommandHandler(["adminpanel", "panel"], adminpanel_command))
     application.add_handler(CommandHandler("restart", restart_command))
     application.add_handler(CommandHandler("backup", backup_command))
     application.add_handler(CommandHandler("cleancache", cleancache_command))
@@ -21340,8 +21449,8 @@ def register_commands(application):
     # ====================================
     # CALLBACK HANDLERS
     # ====================================
-    # Channel membership check callback (must be first to handle check_membership)
-    application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^check_membership$"))
+    # Channel membership & achievement approval callbacks
+    application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(check_membership$|approve:|deny:)"))
     application.add_handler(CallbackQueryHandler(nightmare_callback, pattern="^nightmare_"))
     application.add_handler(CallbackQueryHandler(dailylb_callback, pattern="^dailylb_"))
     application.add_handler(CallbackQueryHandler(update_callback, pattern="^update_"))
@@ -21351,6 +21460,8 @@ def register_commands(application):
     application.add_handler(CallbackQueryHandler(broadcast_callback, pattern="^broadcast_"))
     application.add_handler(CallbackQueryHandler(guess_callback, pattern="^guess_"))
     application.add_handler(CallbackQueryHandler(trivia_callback, pattern="^trivia_"))
+    application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern="^(panel_|action_)"))
+    application.add_handler(CallbackQueryHandler(button_click, pattern="^(start_guess|start_chase|daily_challenge)$"))
     application.add_handler(CallbackQueryHandler(auction_callback_router, pattern="^(approve_auction_|reject_auction_|host_|approve_player_|reject_player_|approve_captain_|reject_captain_|confirm_sale_|continue_bid_|start_bidding_|fjoin_|rtm_)"))
 
     
