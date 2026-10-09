@@ -2352,10 +2352,20 @@ class ArenaOfChampionsBot:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_auction_bids_player ON auction_bids(player_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_auction_notifications_user ON auction_notifications(user_id)")
                 
+                # Persistent auction state table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_auction_state (
+                        key VARCHAR(100) PRIMARY KEY,
+                        data JSONB,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
                 conn.commit()
                 cursor.close()
                 self.return_db_connection(conn)
                 logger.info("Database tables initialized successfully")
+                self.load_auction_state()
                 
         except Exception as e:
             logger.error(f"Error initializing database tables: {e}")
@@ -5867,6 +5877,125 @@ class ArenaOfChampionsBot:
     # NEW AUCTION SYSTEM METHODS
     # ====================================
     
+    def save_auction_state(self):
+        """Save auction proposals and approved auctions to database"""
+        try:
+            proposals_data = {}
+            for pid, prop in self.auction_proposals.items():
+                proposals_data[str(pid)] = {
+                    'id': prop.id,
+                    'creator_id': prop.creator_id,
+                    'creator_name': prop.creator_name,
+                    'name': prop.name,
+                    'teams': prop.teams,
+                    'purse': prop.purse,
+                    'base_price': prop.base_price,
+                    'status': prop.status,
+                    'created_at': prop.created_at.isoformat() if hasattr(prop, 'created_at') and hasattr(prop.created_at, 'isoformat') else str(getattr(prop, 'created_at', '')),
+                    'force_join_links': getattr(prop, 'force_join_links', [])
+                }
+            
+            auctions_data = {}
+            for aid, a in self.approved_auctions.items():
+                auctions_data[str(aid)] = {
+                    'id': a.id,
+                    'proposal_id': getattr(a, 'proposal_id', aid),
+                    'name': a.name,
+                    'creator_id': a.creator_id,
+                    'creator_name': a.creator_name,
+                    'teams': a.teams,
+                    'purse': a.purse,
+                    'base_price': a.base_price,
+                    'status': a.status,
+                    'created_at': a.created_at.isoformat() if hasattr(a, 'created_at') and hasattr(a.created_at, 'isoformat') else str(getattr(a, 'created_at', '')),
+                    'approved_at': a.approved_at.isoformat() if hasattr(a, 'approved_at') and hasattr(a.approved_at, 'isoformat') else str(getattr(a, 'approved_at', '')),
+                    'group_chat_id': getattr(a, 'group_chat_id', None),
+                    'force_join_links': getattr(a, 'force_join_links', [])
+                }
+
+            with self.get_db_connection_ctx() as conn:
+                if not conn:
+                    return
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_auction_state (
+                        key VARCHAR(100) PRIMARY KEY,
+                        data JSONB,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                cursor.execute("""
+                    INSERT INTO bot_auction_state (key, data, updated_at)
+                    VALUES ('auction_state', %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE
+                    SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
+                """, (json.dumps({'proposals': proposals_data, 'auctions': auctions_data}),))
+                cursor.close()
+        except Exception as e:
+            logger.warning(f"Error saving auction state to DB: {e}")
+
+    def load_auction_state(self):
+        """Load auction proposals and approved auctions from database"""
+        try:
+            with self.get_db_connection_ctx() as conn:
+                if not conn:
+                    return
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_auction_state (
+                        key VARCHAR(100) PRIMARY KEY,
+                        data JSONB,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                cursor.execute("SELECT data FROM bot_auction_state WHERE key = 'auction_state'")
+                row = cursor.fetchone()
+                cursor.close()
+                if not row or not row[0]:
+                    return
+                
+                raw_data = row[0]
+                if isinstance(raw_data, str):
+                    raw_data = json.loads(raw_data)
+                
+                proposals_dict = raw_data.get('proposals', {})
+                for pid_str, pdata in proposals_dict.items():
+                    pid = int(pid_str)
+                    prop = AuctionProposal(pid, pdata.get('creator_id', 0), pdata.get('creator_name', ''))
+                    prop.name = pdata.get('name', '')
+                    prop.teams = pdata.get('teams', [])
+                    prop.purse = pdata.get('purse', 0)
+                    prop.base_price = pdata.get('base_price', 0)
+                    prop.status = pdata.get('status', 'pending')
+                    prop.force_join_links = pdata.get('force_join_links', [])
+                    self.auction_proposals[pid] = prop
+                    if pid > self.proposal_counter:
+                        self.proposal_counter = pid
+
+                auctions_dict = raw_data.get('auctions', {})
+                for aid_str, adata in auctions_dict.items():
+                    aid = int(aid_str)
+                    pid = adata.get('proposal_id', aid)
+                    prop = self.auction_proposals.get(pid)
+                    if not prop:
+                        prop = AuctionProposal(pid, adata.get('creator_id', 0), adata.get('creator_name', ''))
+                        prop.name = adata.get('name', '')
+                        prop.teams = adata.get('teams', [])
+                        prop.purse = adata.get('purse', 0)
+                        prop.base_price = adata.get('base_price', 0)
+                    approved_a = ApprovedAuction(aid, prop)
+                    approved_a.proposal_id = pid
+                    approved_a.status = adata.get('status', 'setup')
+                    approved_a.group_chat_id = adata.get('group_chat_id')
+                    approved_a.force_join_links = adata.get('force_join_links', [])
+                    self.approved_auctions[aid] = approved_a
+                    if aid > self.auction_counter:
+                        self.auction_counter = aid
+
+                logger.info(f"Loaded {len(self.auction_proposals)} proposals and {len(self.approved_auctions)} approved auctions from DB")
+        except Exception as e:
+            logger.warning(f"Error loading auction state from DB: {e}")
+
     def create_auction_proposal(self, creator_id: int, creator_name: str) -> int:
         """Create a new auction proposal"""
         self.proposal_counter += 1
@@ -5874,6 +6003,7 @@ class ArenaOfChampionsBot:
         
         proposal = AuctionProposal(proposal_id, creator_id, creator_name)
         self.auction_proposals[proposal_id] = proposal
+        self.save_auction_state()
         
         logger.info(f"Created auction proposal {proposal_id} by {creator_name}")
         return proposal_id
@@ -5896,6 +6026,7 @@ class ArenaOfChampionsBot:
         if 'force_join_links' in data:
             proposal.force_join_links = data['force_join_links']
         
+        self.save_auction_state()
         return True
     
     def send_proposal_to_admins(self, proposal_id: int) -> bool:
@@ -5909,6 +6040,9 @@ class ArenaOfChampionsBot:
     
     def approve_auction_proposal(self, proposal_id: int, admin_id: int, admin_name: str) -> Optional[int]:
         """Approve a proposal and create approved auction"""
+        if proposal_id not in self.auction_proposals:
+            self.load_auction_state()
+        
         if proposal_id not in self.auction_proposals:
             # Check if this proposal was already approved
             for aid, auction in self.approved_auctions.items():
@@ -5928,18 +6062,24 @@ class ArenaOfChampionsBot:
         proposal.admin_id = admin_id
         proposal.admin_name = admin_name
         
-        self.auction_counter += 1
-        auction_id = self.auction_counter
+        candidate_id = proposal_id
+        if candidate_id in self.approved_auctions:
+            candidate_id = max(list(self.approved_auctions.keys()) + [self.auction_counter, proposal_id]) + 1
+        self.auction_counter = max(self.auction_counter, candidate_id)
+        auction_id = candidate_id
         
         approved_auction = ApprovedAuction(auction_id, proposal)
         approved_auction.proposal_id = proposal_id
         self.approved_auctions[auction_id] = approved_auction
         
+        self.save_auction_state()
         logger.info(f"Approved auction {auction_id} from proposal {proposal_id}")
         return auction_id
     
     def reject_auction_proposal(self, proposal_id: int, admin_id: int, admin_name: str) -> bool:
         """Reject a proposal"""
+        if proposal_id not in self.auction_proposals:
+            self.load_auction_state()
         if proposal_id not in self.auction_proposals:
             return False
         
@@ -5949,12 +6089,17 @@ class ArenaOfChampionsBot:
         proposal.admin_id = admin_id
         proposal.admin_name = admin_name
         
+        self.save_auction_state()
         logger.info(f"Rejected proposal {proposal_id}")
         return True
     
     def get_approved_auction(self, auction_id: int) -> Optional[ApprovedAuction]:
         """Get approved auction by ID"""
-        return self.approved_auctions.get(auction_id)
+        auction = self.approved_auctions.get(auction_id)
+        if not auction:
+            self.load_auction_state()
+            auction = self.approved_auctions.get(auction_id)
+        return auction
     
     def start_captain_registration(self, auction_id: int) -> bool:
         """Start captain registration phase"""
@@ -16138,18 +16283,15 @@ async def send_proposal_to_admins(update: Update, proposal_id: int, context: Con
         # Get bot instance - use context if available, otherwise get from update
         bot = context.bot if context else update.get_bot()
         
-        # Send to all admins
+        # Send to all admins and creator
         admin_ids = bot_instance.get_all_admin_ids()
-        logger.info(f"Sending auction proposal to {len(admin_ids)} admins: {admin_ids}")
-        
-        # If no admins found or creator is admin, make sure creator gets notification
-        if not admin_ids or proposal.creator_id in admin_ids:
-            if proposal.creator_id not in admin_ids:
-                admin_ids.append(proposal.creator_id)
-                logger.info(f"Added creator {proposal.creator_id} to admin notification list")
+        recipient_ids = set(admin_ids)
+        if proposal.creator_id:
+            recipient_ids.add(proposal.creator_id)
+        logger.info(f"Sending auction proposal to {len(recipient_ids)} recipients (admins + creator): {recipient_ids}")
         
         notification_sent = False
-        for admin_id in admin_ids:
+        for admin_id in recipient_ids:
             try:
                 await bot.send_message(
                     chat_id=admin_id,
@@ -16158,9 +16300,9 @@ async def send_proposal_to_admins(update: Update, proposal_id: int, context: Con
                     reply_markup=reply_markup
                 )
                 notification_sent = True
-                logger.info(f"Auction proposal sent to admin {admin_id}")
+                logger.info(f"Auction proposal sent to recipient {admin_id}")
             except Exception as e:
-                logger.error(f"Failed to send proposal to admin {admin_id}: {e}")
+                logger.error(f"Failed to send proposal to recipient {admin_id}: {e}")
         
         if not notification_sent:
             logger.warning("Failed to send proposal to any admin - sending fallback message to creator")
@@ -16182,7 +16324,46 @@ async def send_proposal_to_admins(update: Update, proposal_id: int, context: Con
                 
     except Exception as e:
         logger.error(f"Error sending proposal to admins: {e}")
-#====================================
+def recover_proposal_from_message(proposal_id: int, message_text: str) -> Optional[AuctionProposal]:
+    """Recover an AuctionProposal object by parsing the proposal message text if lost from memory"""
+    if not message_text:
+        return None
+    try:
+        clean_text = re.sub(r'<[^>]+>', '', message_text)
+        
+        c_id_match = re.search(r'Creator ID:\s*(\d+)', clean_text)
+        c_name_match = re.search(r'Creator:\s*([^\n\r]+)', clean_text)
+        name_match = re.search(r'Name:\s*([^\n\r]+)', clean_text)
+        purse_match = re.search(r'Purse per Team:\s*([0-9.]+)', clean_text)
+        base_match = re.search(r'Base Price:\s*([0-9.]+)', clean_text)
+        
+        creator_id = int(c_id_match.group(1)) if c_id_match else 0
+        creator_name = c_name_match.group(1).strip() if c_name_match else "Organizer"
+        auction_name = name_match.group(1).strip() if name_match else f"Auction #{proposal_id}"
+        purse = float(purse_match.group(1)) if purse_match else 100.0
+        base_price = float(base_match.group(1)) if base_match else 1.0
+        
+        teams = []
+        for line in clean_text.splitlines():
+            line = line.strip()
+            m = re.match(r'^\d+\.\s*(.+)$', line)
+            if m:
+                team_name = m.group(1).strip()
+                if team_name and not team_name.startswith('http'):
+                    teams.append(team_name)
+                    
+        proposal = AuctionProposal(proposal_id, creator_id, creator_name)
+        proposal.name = auction_name
+        proposal.teams = teams if teams else ["Team A", "Team B"]
+        proposal.purse = purse
+        proposal.base_price = base_price
+        proposal.status = "pending"
+        return proposal
+    except Exception as e:
+        logger.error(f"Failed to recover proposal from message text: {e}")
+        return None
+
+# ====================================
 # ADMIN APPROVAL COMMANDS
 # ====================================
 
@@ -16190,14 +16371,10 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
     """Handle admin approval/rejection of auction proposals"""
     try:
         query = update.callback_query
+        if not query:
+            return
         user = query.from_user
         data = query.data
-
-        # Answer callback immediately to eliminate loading spinner / button freeze
-        try:
-            await query.answer()
-        except Exception:
-            pass
 
         proposal_id = None
         if data.startswith(("approve_auction_", "reject_auction_")):
@@ -16206,21 +16383,48 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
             except (ValueError, IndexError):
                 proposal_id = None
 
-        proposal = bot_instance.auction_proposals.get(proposal_id) if proposal_id else None
+        if not proposal_id:
+            try:
+                await query.answer("❌ Invalid proposal ID!", show_alert=True)
+            except Exception:
+                pass
+            return
 
-        # Check authorization: allow Bot Admins OR the Creator of the auction proposal
+        proposal = bot_instance.auction_proposals.get(proposal_id)
+        if not proposal:
+            bot_instance.load_auction_state()
+            proposal = bot_instance.auction_proposals.get(proposal_id)
+
+        # Recover proposal from message text if missing (e.g. after bot restart)
+        msg_text = (query.message.text or query.message.caption or "") if query.message else ""
+        if not proposal and msg_text:
+            proposal = recover_proposal_from_message(proposal_id, msg_text)
+            if proposal:
+                bot_instance.auction_proposals[proposal_id] = proposal
+                bot_instance.save_auction_state()
+                logger.info(f"Successfully recovered proposal {proposal_id} from message text: {proposal.name}")
+
+        # Check authorization: allow Bot Admins, Proposal Creator, Group Chat Admins, or Private Chat recipients
         is_admin_user = bot_instance.is_admin(user.id)
         is_creator = bool(proposal and proposal.creator_id == user.id)
+        is_chat_admin = False
+        if query.message and query.message.chat and query.message.chat.type in ('group', 'supergroup'):
+            try:
+                member = await context.bot.get_chat_member(query.message.chat.id, user.id)
+                if member.status in ('creator', 'administrator'):
+                    is_chat_admin = True
+            except Exception:
+                pass
+        is_private_chat = bool(query.message and query.message.chat and query.message.chat.type == 'private')
 
-        if not is_admin_user and not is_creator:
-            await query.answer("❌ Only bot admins or the auction creator can approve/reject this proposal!", show_alert=True)
+        if not (is_admin_user or is_creator or is_chat_admin or is_private_chat):
+            try:
+                await query.answer("❌ Only bot admins or the auction creator can approve/reject this proposal!", show_alert=True)
+            except Exception:
+                pass
             return
 
         if data.startswith("approve_auction_"):
-            if not proposal_id:
-                await query.answer("❌ Invalid proposal ID!", show_alert=True)
-                return
-
             auction_id = bot_instance.approve_auction_proposal(proposal_id, user.id, user.full_name or user.first_name)
 
             if auction_id:
@@ -16229,7 +16433,7 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
                 creator_id = proposal.creator_id if proposal else user.id
 
                 # Notify creator if approver is someone else
-                if creator_id != user.id:
+                if creator_id and creator_id != user.id:
                     try:
                         await context.bot.send_message(
                             chat_id=creator_id,
@@ -16243,15 +16447,23 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
                         logger.warning(f"Could not notify creator {creator_id}: {e}")
 
                 # Update admin message
-                await query.edit_message_text(
-                    text=f"✅ <b>APPROVED</b> by {user.first_name}\n\n"
-                         f"🏆 <b>Auction:</b> {prop_name}\n"
-                         f"👤 <b>Creator:</b> {creator_name}\n"
-                         f"🆔 <b>Auction ID:</b> {auction_id}\n"
-                         f"⏰ <b>Approved:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-                         f"🎮 <b>Next:</b> Use <code>/hostpanel {auction_id}</code> to manage the auction!",
-                    parse_mode='HTML'
-                )
+                try:
+                    await query.edit_message_text(
+                        text=f"✅ <b>APPROVED</b> by {user.first_name}\n\n"
+                             f"🏆 <b>Auction:</b> {prop_name}\n"
+                             f"👤 <b>Creator:</b> {creator_name}\n"
+                             f"🆔 <b>Auction ID:</b> {auction_id}\n"
+                             f"⏰ <b>Approved:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                             f"🎮 <b>Next:</b> Use <code>/hostpanel {auction_id}</code> to manage the auction!",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logger.error(f"Error editing message after approval: {e}")
+
+                try:
+                    await query.answer("✅ Auction approved successfully!")
+                except Exception:
+                    pass
             else:
                 # Check if already approved
                 already_approved_id = None
@@ -16261,7 +16473,10 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
                         break
 
                 if already_approved_id:
-                    await query.answer(f"⚠️ Already approved as Auction #{already_approved_id}!", show_alert=True)
+                    try:
+                        await query.answer(f"⚠️ Already approved as Auction #{already_approved_id}!", show_alert=True)
+                    except Exception:
+                        pass
                     try:
                         await query.edit_message_text(
                             text=f"✅ <b>ALREADY APPROVED</b>\n\n"
@@ -16272,13 +16487,12 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
                     except Exception:
                         pass
                 else:
-                    await query.answer("⚠️ Proposal expired or not found. Create a new one with /register.", show_alert=True)
+                    try:
+                        await query.answer("⚠️ Proposal expired or not found. Create a new one with /register.", show_alert=True)
+                    except Exception:
+                        pass
 
         elif data.startswith("reject_auction_"):
-            if not proposal_id:
-                await query.answer("❌ Invalid proposal ID!", show_alert=True)
-                return
-
             bot_instance.reject_auction_proposal(proposal_id, user.id, user.full_name or user.first_name)
 
             prop_name = proposal.name if proposal else f"Proposal #{proposal_id}"
@@ -16297,16 +16511,25 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
                 except Exception:
                     pass
 
-            await query.edit_message_text(
-                text=f"❌ <b>REJECTED</b> by {user.first_name}\n\n"
-                     f"🏆 <b>Auction:</b> {prop_name}\n"
-                     f"👤 <b>Creator:</b> {creator_name}\n"
-                     f"⏰ <b>Rejected:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                parse_mode='HTML'
-            )
+            try:
+                await query.edit_message_text(
+                    text=f"❌ <b>REJECTED</b> by {user.first_name}\n\n"
+                         f"🏆 <b>Auction:</b> {prop_name}\n"
+                         f"👤 <b>Creator:</b> {creator_name}\n"
+                         f"⏰ <b>Rejected:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    parse_mode='HTML'
+                )
+            except Exception:
+                pass
+
+            try:
+                await query.answer("❌ Proposal rejected.")
+            except Exception:
+                pass
 
     except telegram_error.BadRequest as e:
-        if "query is too old" in str(e).lower() or "timeout" in str(e).lower() or "message is not modified" in str(e).lower():
+        err_str = str(e).lower()
+        if "query is too old" in err_str or "timeout" in err_str or "message is not modified" in err_str or "already answered" in err_str:
             logger.warning(f"Admin approval callback benign error: {e}")
             return
         else:
@@ -16663,9 +16886,21 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
         # Extract auction_id from callback data
         auction_id = int(data.split('_')[-1])
         auction = bot_instance.get_approved_auction(auction_id)
-        
-        # Enhanced host validation
-        is_host = (auction and (auction.creator_id == user.id or bot_instance.is_admin(user.id)))
+        if not auction:
+            await query.answer("⚠️ Auction not found or session expired.", show_alert=True)
+            return
+
+        is_chat_admin = False
+        if query.message and query.message.chat and query.message.chat.type in ('group', 'supergroup'):
+            try:
+                member = await context.bot.get_chat_member(query.message.chat.id, user.id)
+                if member.status in ('creator', 'administrator'):
+                    is_chat_admin = True
+            except Exception:
+                pass
+
+        # Enhanced host validation: creator, bot admin, or group chat admin
+        is_host = (auction.creator_id == user.id or bot_instance.is_admin(user.id) or is_chat_admin)
         if not is_host:
             await query.answer("❌ Only auction host/admin can use host panel!", show_alert=True)
             return
@@ -17010,8 +17245,21 @@ async def handle_captain_approval_callbacks(update: Update, context: ContextType
         captain_id = int(parts[3])
         
         auction = bot_instance.get_approved_auction(auction_id)
-        if not auction or (auction.creator_id != user.id and not bot_instance.is_admin(user.id)):
-            await query.answer("⛔ Access Denied! Only the Auction Host or Bot Admin can approve captains.", show_alert=True)
+        if not auction:
+            await query.answer("⚠️ Auction not found or session expired.", show_alert=True)
+            return
+
+        is_chat_admin = False
+        if query.message and query.message.chat and query.message.chat.type in ('group', 'supergroup'):
+            try:
+                member = await context.bot.get_chat_member(query.message.chat.id, user.id)
+                if member.status in ('creator', 'administrator'):
+                    is_chat_admin = True
+            except Exception:
+                pass
+
+        if auction.creator_id != user.id and not bot_instance.is_admin(user.id) and not is_chat_admin:
+            await query.answer("⛔ Access Denied! Only the Auction Host or Admins can approve captains.", show_alert=True)
             return
         
         if data.startswith("approve_captain_"):
@@ -18136,8 +18384,21 @@ async def handle_player_approval_callbacks(update: Update, context: ContextTypes
         player_id = int(parts[3])
         
         auction = bot_instance.get_approved_auction(auction_id)
-        if not auction or (auction.creator_id != user.id and not bot_instance.is_admin(user.id)):
-            await query.answer("⛔ Access Denied! Only auction host or admin can approve/reject players.", show_alert=True)
+        if not auction:
+            await query.answer("⚠️ Auction not found or session expired.", show_alert=True)
+            return
+
+        is_chat_admin = False
+        if query.message and query.message.chat and query.message.chat.type in ('group', 'supergroup'):
+            try:
+                member = await context.bot.get_chat_member(query.message.chat.id, user.id)
+                if member.status in ('creator', 'administrator'):
+                    is_chat_admin = True
+            except Exception:
+                pass
+
+        if auction.creator_id != user.id and not bot_instance.is_admin(user.id) and not is_chat_admin:
+            await query.answer("⛔ Access Denied! Only auction host or admins can approve/reject players.", show_alert=True)
             return
         
         if data.startswith("approve_player_"):
