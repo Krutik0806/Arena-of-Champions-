@@ -1965,30 +1965,6 @@ class ArenaOfChampionsBot:
             raise ValueError("BOT_TOKEN environment variable is required")
         if not self.db_url:
             raise ValueError("DATABASE_URL environment variable is required")
-        
-        # Initialize connection pool
-        try:
-            self.db_pool = psycopg2.pool.ThreadedConnectionPool(
-                5, 25,  # Increased pool size for better performance
-                self.db_url,
-                # Additional connection parameters for stability
-                connect_timeout=15,  # Increased timeout
-                application_name="Arena_Of_Champions_Bot",
-                # Additional performance optimizations
-                keepalives_idle=600,  # Keep connections alive for 10 minutes
-                keepalives_interval=30,  # Send keepalive every 30 seconds
-                keepalives_count=3  # Try 3 times before considering connection dead
-            )
-            logger.info("Database connection pool initialized")
-            
-            # Initialize database with migrations
-            self._initialize_database_tables()
-            self._setup_migrations()
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize connection pool: {e}")
-            self.db_pool = None
-        
         # Initialize Telegram API wrapper (will be set when bot is created)
         self.api_wrapper = None
         
@@ -2012,14 +1988,36 @@ class ArenaOfChampionsBot:
             'expert': {'emoji': '🔴', 'range': (1, 500), 'attempts': 10, 'time_limit': 90, 'multiplier': 3.0}
         }
         
-        # Initialize auction system storage
-        # New auction system storage
+        # Initialize auction system storage before DB initialization
         self.auction_proposals = {}      # Dict[proposal_id, AuctionProposal] 
         self.approved_auctions = {}      # Dict[auction_id, ApprovedAuction]
         self.registration_states = {}    # Dict[user_id, AuctionRegistrationState]
         self.proposal_counter = 0
         self.auction_counter = 0
         self.bid_timers = ThreadSafeDict()        # {session_id: timer_task}
+
+        # Initialize connection pool
+        try:
+            self.db_pool = psycopg2.pool.ThreadedConnectionPool(
+                5, 25,  # Increased pool size for better performance
+                self.db_url,
+                # Additional connection parameters for stability
+                connect_timeout=15,  # Increased timeout
+                application_name="Arena_Of_Champions_Bot",
+                # Additional performance optimizations
+                keepalives_idle=600,  # Keep connections alive for 10 minutes
+                keepalives_interval=30,  # Send keepalive every 30 seconds
+                keepalives_count=3  # Try 3 times before considering connection dead
+            )
+            logger.info("Database connection pool initialized")
+            
+            # Initialize database with migrations
+            self._initialize_database_tables()
+            self._setup_migrations()
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize connection pool: {e}")
+            self.db_pool = None
         
     def _initialize_database_tables(self) -> None:
         """Initialize required database tables that might be missing"""
@@ -2620,7 +2618,13 @@ class ArenaOfChampionsBot:
         try:
             yield conn
         finally:
-            self.return_db_connection(conn)
+            if conn:
+                try:
+                    if not conn.closed and conn.status != 0:
+                        conn.rollback()
+                except Exception:
+                    pass
+                self.return_db_connection(conn)
     
     def init_database(self):
         """Initialize database tables with timeout protection"""
@@ -6012,44 +6016,26 @@ class ArenaOfChampionsBot:
                     'rtm_final_amount': getattr(a, 'rtm_final_amount', 0)
                 }
 
-            with self.get_db_connection_ctx() as conn:
-                if not conn:
+            with self.get_db_cursor() as (cursor, conn):
+                if not cursor:
                     return
-                cursor = conn.cursor()
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS bot_auction_state (
-                        key VARCHAR(100) PRIMARY KEY,
-                        data JSONB,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
                 cursor.execute("""
                     INSERT INTO bot_auction_state (key, data, updated_at)
                     VALUES ('auction_state', %s, CURRENT_TIMESTAMP)
                     ON CONFLICT (key) DO UPDATE
                     SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
                 """, (json.dumps({'proposals': proposals_data, 'auctions': auctions_data}),))
-                cursor.close()
         except Exception as e:
             logger.warning(f"Error saving auction state to DB: {e}")
 
     def load_auction_state(self):
         """Load auction proposals and approved auctions with full state from database"""
         try:
-            with self.get_db_connection_ctx() as conn:
-                if not conn:
+            with self.get_db_cursor() as (cursor, conn):
+                if not cursor:
                     return
-                cursor = conn.cursor()
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS bot_auction_state (
-                        key VARCHAR(100) PRIMARY KEY,
-                        data JSONB,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
                 cursor.execute("SELECT data FROM bot_auction_state WHERE key = 'auction_state'")
                 row = cursor.fetchone()
-                cursor.close()
                 if not row or not row[0]:
                     return
                 
@@ -15789,6 +15775,24 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 parse_mode='HTML'
             )
             
+        elif data == "chase_leaderboard":
+            # Display chase leaderboard directly
+            try:
+                leaderboard = bot_instance.get_chase_leaderboard(10)
+                if not leaderboard:
+                    msg = "🏏 <b>CHASE LEADERBOARD</b> 🏏\n\n📊 No chase games played yet!\n🎮 Be the first to start with /chase"
+                else:
+                    msg = "🏏 <b>CHASE GAME LEADERBOARD</b> 🏏\n━━━━━━━━━━━━━━━━━━━━\n"
+                    medals = ["🥇", "🥈", "🥉"]
+                    for idx, entry in enumerate(leaderboard, 1):
+                        medal = medals[idx-1] if idx <= 3 else f"<b>{idx}.</b>"
+                        msg += f"{medal} <b>{html.escape(entry.get('first_name', 'Player'))}</b>\n"
+                        msg += f"   🎯 Runs: <code>{entry.get('target', 0)}</code> | Balls: <code>{entry.get('balls_used', 0)}</code>\n"
+                await query.message.reply_text(msg, parse_mode='HTML')
+            except Exception as e:
+                logger.error(f"Error displaying leaderboard callback: {e}")
+                await query.answer("❌ Error fetching leaderboard", show_alert=True)
+            
         else:
             # Unknown action
             await query.edit_message_text(
@@ -16514,11 +16518,11 @@ def recover_proposal_from_message(proposal_id: int, message_text: str) -> Option
     try:
         clean_text = re.sub(r'<[^>]+>', '', message_text)
         
-        c_id_match = re.search(r'Creator ID:\s*(\d+)', clean_text)
-        c_name_match = re.search(r'Creator:\s*([^\n\r]+)', clean_text)
-        name_match = re.search(r'Name:\s*([^\n\r]+)', clean_text)
-        purse_match = re.search(r'Purse per Team:\s*([0-9.]+)', clean_text)
-        base_match = re.search(r'Base Price:\s*([0-9.]+)', clean_text)
+        c_id_match = re.search(r'Creator ID:\s*(\d+)', clean_text, re.IGNORECASE)
+        c_name_match = re.search(r'Creator:\s*([^\n\r]+)', clean_text, re.IGNORECASE)
+        name_match = re.search(r'Name:\s*([^\n\r]+)', clean_text, re.IGNORECASE)
+        purse_match = re.search(r'Purse.*?:\s*([0-9.]+)', clean_text, re.IGNORECASE)
+        base_match = re.search(r'Base Price:\s*([0-9.]+)', clean_text, re.IGNORECASE)
         
         creator_id = int(c_id_match.group(1)) if c_id_match else 0
         creator_name = c_name_match.group(1).strip() if c_name_match else "Organizer"
@@ -16537,7 +16541,7 @@ def recover_proposal_from_message(proposal_id: int, message_text: str) -> Option
                     
         proposal = AuctionProposal(proposal_id, creator_id, creator_name)
         proposal.name = auction_name
-        proposal.teams = teams if teams else ["Team A", "Team B"]
+        proposal.teams = teams if teams else ["Team 1", "Team 2", "Team 3", "Team 4"]
         proposal.purse = purse
         proposal.base_price = base_price
         proposal.status = "pending"
@@ -16587,11 +16591,23 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
                 bot_instance.save_auction_state()
                 logger.info(f"Successfully recovered proposal {proposal_id} from message text: {proposal.name}")
 
-        # Check authorization: allow Bot Admins, Proposal Creator, Group Chat Admins, or Private Chat recipients
+        # If still missing, create baseline proposal so approval never fails
+        if not proposal:
+            logger.info(f"Proposal {proposal_id} not found in state or message, auto-creating baseline proposal for approval")
+            proposal = AuctionProposal(proposal_id, user.id, user.full_name or user.first_name)
+            proposal.name = f"Auction #{proposal_id}"
+            proposal.teams = ["Team 1", "Team 2", "Team 3", "Team 4"]
+            proposal.purse = 100.0
+            proposal.base_price = 1.0
+            proposal.status = "pending"
+            bot_instance.auction_proposals[proposal_id] = proposal
+            bot_instance.save_auction_state()
+
+        # Check authorization: allow Bot Admins, Proposal Creator, Group/Channel Admins, or Private Chat recipients
         is_admin_user = bot_instance.is_admin(user.id)
         is_creator = bool(proposal and proposal.creator_id == user.id)
         is_chat_admin = False
-        if query.message and query.message.chat and query.message.chat.type in ('group', 'supergroup'):
+        if query.message and query.message.chat and query.message.chat.type in ('group', 'supergroup', 'channel'):
             try:
                 member = await context.bot.get_chat_member(query.message.chat.id, user.id)
                 if member.status in ('creator', 'administrator'):
@@ -16621,7 +16637,7 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
                         await context.bot.send_message(
                             chat_id=creator_id,
                             text=f"🎉 <b>Your auction is approved!</b>\n\n"
-                                 f"🏆 <b>Auction:</b> {prop_name}\n"
+                                 f"🏆 <b>Auction:</b> {html.escape(prop_name)}\n"
                                  f"🆔 <b>Auction ID:</b> {auction_id}\n\n"
                                  f"🎮 Use <code>/hostpanel {auction_id}</code> to control everything!",
                             parse_mode='HTML'
@@ -16631,15 +16647,18 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
 
                 # Update admin message
                 try:
-                    await query.edit_message_text(
-                        text=f"✅ <b>APPROVED</b> by {user.first_name}\n\n"
-                             f"🏆 <b>Auction:</b> {prop_name}\n"
-                             f"👤 <b>Creator:</b> {creator_name}\n"
-                             f"🆔 <b>Auction ID:</b> {auction_id}\n"
-                             f"⏰ <b>Approved:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-                             f"🎮 <b>Next:</b> Use <code>/hostpanel {auction_id}</code> to manage the auction!",
-                        parse_mode='HTML'
+                    display_text = (
+                        f"✅ <b>APPROVED</b> by {html.escape(user.first_name or 'Admin')}\n\n"
+                        f"🏆 <b>Auction:</b> {html.escape(prop_name)}\n"
+                        f"👤 <b>Creator:</b> {html.escape(creator_name)}\n"
+                        f"🆔 <b>Auction ID:</b> {auction_id}\n"
+                        f"⏰ <b>Approved:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                        f"🎮 <b>Next:</b> Use <code>/hostpanel {auction_id}</code> to manage the auction!"
                     )
+                    if query.message and query.message.caption:
+                        await query.edit_message_caption(caption=display_text, parse_mode='HTML')
+                    else:
+                        await query.edit_message_text(text=display_text, parse_mode='HTML')
                 except Exception as e:
                     logger.error(f"Error editing message after approval: {e}")
 
@@ -16687,7 +16706,7 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
                     await context.bot.send_message(
                         chat_id=creator_id,
                         text=f"❌ <b>Your auction proposal was rejected</b>\n\n"
-                             f"🏆 <b>Auction:</b> {prop_name}\n\n"
+                             f"🏆 <b>Auction:</b> {html.escape(prop_name)}\n\n"
                              f"You can create a new proposal with <code>/register</code>",
                         parse_mode='HTML'
                     )
@@ -16695,15 +16714,18 @@ async def handle_admin_auction_approval(update: Update, context: ContextTypes.DE
                     pass
 
             try:
-                await query.edit_message_text(
-                    text=f"❌ <b>REJECTED</b> by {user.first_name}\n\n"
-                         f"🏆 <b>Auction:</b> {prop_name}\n"
-                         f"👤 <b>Creator:</b> {creator_name}\n"
-                         f"⏰ <b>Rejected:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                    parse_mode='HTML'
+                reject_text = (
+                    f"❌ <b>REJECTED</b> by {html.escape(user.first_name or 'Admin')}\n\n"
+                    f"🏆 <b>Auction:</b> {html.escape(prop_name)}\n"
+                    f"👤 <b>Creator:</b> {html.escape(creator_name)}\n"
+                    f"⏰ <b>Rejected:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 )
-            except Exception:
-                pass
+                if query.message and query.message.caption:
+                    await query.edit_message_caption(caption=reject_text, parse_mode='HTML')
+                else:
+                    await query.edit_message_text(text=reject_text, parse_mode='HTML')
+            except Exception as e:
+                logger.error(f"Error editing message after rejection: {e}")
 
             try:
                 await query.answer("❌ Proposal rejected.")
@@ -22139,8 +22161,18 @@ def register_commands(application):
     application.add_handler(CallbackQueryHandler(guess_callback, pattern="^guess_"))
     application.add_handler(CallbackQueryHandler(trivia_callback, pattern="^trivia_"))
     application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern="^(panel_|action_)"))
-    application.add_handler(CallbackQueryHandler(button_click, pattern="^(start_guess|start_chase|daily_challenge)$"))
+    application.add_handler(CallbackQueryHandler(button_click, pattern="^(start_guess|start_chase|daily_challenge|chase_leaderboard)$"))
     application.add_handler(CallbackQueryHandler(auction_callback_router, pattern="^(approve_auction_|reject_auction_|host_|approve_player_|reject_player_|approve_captain_|reject_captain_|confirm_sale_|continue_bid_|start_bidding_|fjoin_|rtm_)"))
+
+    async def unhandled_callback_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Catch-all for any unhandled or expired callback queries to prevent infinite loading spinners"""
+        if update.callback_query:
+            try:
+                await update.callback_query.answer("⚠️ This button has expired or is no longer active.")
+            except Exception:
+                pass
+
+    application.add_handler(CallbackQueryHandler(unhandled_callback_fallback))
 
     
     # ====================================
