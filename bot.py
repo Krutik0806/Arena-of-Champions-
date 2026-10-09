@@ -685,7 +685,7 @@ def paginate_text(text: str, max_length: int = 4000) -> List[str]:
     return pages
 
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup, error as telegram_error
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, TypeHandler
 from telegram.error import BadRequest
 from telegram.constants import ChatType
 import psycopg2
@@ -22149,6 +22149,16 @@ def register_commands(application):
     # ====================================
     # CALLBACK HANDLERS
     # ====================================
+    # Global logger for every button click across the entire bot
+    async def global_button_logger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update and update.callback_query:
+            u = update.effective_user
+            u_name = u.first_name if u else "Unknown"
+            u_id = u.id if u else 0
+            logger.info(f"🔘 [BUTTON CLICK] User {u_id} ({u_name}) clicked '{update.callback_query.data}'")
+
+    application.add_handler(TypeHandler(Update, global_button_logger), group=-1)
+
     # Channel membership & achievement approval callbacks
     application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(check_membership$|approve:|deny:)"))
     application.add_handler(CallbackQueryHandler(nightmare_callback, pattern="^nightmare_"))
@@ -22229,8 +22239,17 @@ async def start_bot():
         await application.initialize()
         await application.start()
         
-        # Start polling
-        await application.updater.start_polling()
+        # Delete any existing webhook and start polling with explicit allowed_updates
+        try:
+            await application.bot.delete_webhook(drop_pending_updates=False)
+        except Exception as e:
+            logger.warning(f"Error deleting webhook: {e}")
+        
+        # Start polling with all update types explicitly enabled
+        await application.updater.start_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=False
+        )
         
         logger.info("✅ Bot started successfully!")
         
