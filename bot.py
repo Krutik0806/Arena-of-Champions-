@@ -5878,7 +5878,7 @@ class ArenaOfChampionsBot:
     # ====================================
     
     def save_auction_state(self):
-        """Save auction proposals and approved auctions to database"""
+        """Save auction proposals and full approved auctions state to database"""
         try:
             proposals_data = {}
             for pid, prop in self.auction_proposals.items():
@@ -5897,6 +5897,89 @@ class ArenaOfChampionsBot:
             
             auctions_data = {}
             for aid, a in self.approved_auctions.items():
+                # Captains serialization
+                caps_data = {}
+                for cid, cap in getattr(a, 'approved_captains', {}).items():
+                    player_ids = []
+                    for p in getattr(cap, 'players', []):
+                        if hasattr(p, 'user_id'):
+                            player_ids.append(p.user_id)
+                        elif isinstance(p, dict) and 'user_id' in p:
+                            player_ids.append(p['user_id'])
+                        else:
+                            player_ids.append(p)
+                    caps_data[str(cid)] = {
+                        'user_id': cap.user_id,
+                        'name': getattr(cap, 'name', ''),
+                        'team_name': getattr(cap, 'team_name', ''),
+                        'purse': getattr(cap, 'purse', 0),
+                        'spent': getattr(cap, 'spent', 0),
+                        'players': player_ids
+                    }
+
+                reg_caps_data = {}
+                for cid, rcap in getattr(a, 'registered_captains', {}).items():
+                    reg_caps_data[str(cid)] = {
+                        'user_id': rcap.user_id,
+                        'name': getattr(rcap, 'name', ''),
+                        'team_name': getattr(rcap, 'team_name', ''),
+                        'status': getattr(rcap, 'status', 'pending')
+                    }
+
+                # Players serialization
+                players_data = {}
+                for pid, p in getattr(a, 'approved_players', {}).items():
+                    players_data[str(pid)] = {
+                        'user_id': p.user_id,
+                        'name': getattr(p, 'name', ''),
+                        'username': getattr(p, 'username', None),
+                        'base_price': getattr(p, 'base_price', 1),
+                        'current_bid': getattr(p, 'current_bid', 0),
+                        'current_bidder_id': getattr(p, 'current_bidder_id', None),
+                        'current_bidder_name': getattr(p, 'current_bidder_name', None),
+                        'winning_team': getattr(p, 'winning_team', None),
+                        'sold_price': getattr(p, 'sold_price', 0),
+                        'is_sold': getattr(p, 'is_sold', False)
+                    }
+
+                reg_players_data = {}
+                for pid, rp in getattr(a, 'registered_players', {}).items():
+                    reg_players_data[str(pid)] = {
+                        'user_id': rp.user_id,
+                        'name': getattr(rp, 'name', ''),
+                        'username': getattr(rp, 'username', None),
+                        'status': getattr(rp, 'status', 'pending')
+                    }
+
+                # Queue serialization
+                queue_ids = []
+                for qp in getattr(a, 'player_queue', []):
+                    if hasattr(qp, 'user_id'):
+                        queue_ids.append(qp.user_id)
+                    elif isinstance(qp, dict) and 'user_id' in qp:
+                        queue_ids.append(qp['user_id'])
+                    else:
+                        queue_ids.append(qp)
+
+                # Sold & Unsold serialization
+                sold_data = {}
+                for pid, sp in getattr(a, 'sold_players', {}).items():
+                    sold_data[str(pid)] = {
+                        'user_id': getattr(sp, 'user_id', pid),
+                        'name': getattr(sp, 'name', ''),
+                        'sold_price': getattr(sp, 'sold_price', 0),
+                        'winning_team': getattr(sp, 'winning_team', None)
+                    }
+
+                unsold_data = {}
+                for pid, up in getattr(a, 'unsold_players', {}).items():
+                    unsold_data[str(pid)] = {
+                        'user_id': getattr(up, 'user_id', pid),
+                        'name': getattr(up, 'name', '')
+                    }
+
+                curr_player_id = getattr(a.current_player, 'user_id', None) if getattr(a, 'current_player', None) else None
+
                 auctions_data[str(aid)] = {
                     'id': a.id,
                     'proposal_id': getattr(a, 'proposal_id', aid),
@@ -5910,7 +5993,23 @@ class ArenaOfChampionsBot:
                     'created_at': a.created_at.isoformat() if hasattr(a, 'created_at') and hasattr(a.created_at, 'isoformat') else str(getattr(a, 'created_at', '')),
                     'approved_at': a.approved_at.isoformat() if hasattr(a, 'approved_at') and hasattr(a.approved_at, 'isoformat') else str(getattr(a, 'approved_at', '')),
                     'group_chat_id': getattr(a, 'group_chat_id', None),
-                    'force_join_links': getattr(a, 'force_join_links', [])
+                    'force_join_links': getattr(a, 'force_join_links', []),
+                    'bidding_active': getattr(a, 'bidding_active', False),
+                    'is_paused': getattr(a, 'is_paused', False),
+                    'current_player_index': getattr(a, 'current_player_index', 0),
+                    'current_player_id': curr_player_id,
+                    'highest_bidder': getattr(a, 'highest_bidder', None),
+                    'highest_bid': getattr(a, 'highest_bid', a.base_price),
+                    'approved_captains': caps_data,
+                    'registered_captains': reg_caps_data,
+                    'approved_players': players_data,
+                    'registered_players': reg_players_data,
+                    'player_queue_ids': queue_ids,
+                    'sold_players': sold_data,
+                    'unsold_players': unsold_data,
+                    'rtm_state': getattr(a, 'rtm_state', None),
+                    'rtm_base_amount': getattr(a, 'rtm_base_amount', 0),
+                    'rtm_final_amount': getattr(a, 'rtm_final_amount', 0)
                 }
 
             with self.get_db_connection_ctx() as conn:
@@ -5935,7 +6034,7 @@ class ArenaOfChampionsBot:
             logger.warning(f"Error saving auction state to DB: {e}")
 
     def load_auction_state(self):
-        """Load auction proposals and approved auctions from database"""
+        """Load auction proposals and approved auctions with full state from database"""
         try:
             with self.get_db_connection_ctx() as conn:
                 if not conn:
@@ -5983,18 +6082,101 @@ class ArenaOfChampionsBot:
                         prop.teams = adata.get('teams', [])
                         prop.purse = adata.get('purse', 0)
                         prop.base_price = adata.get('base_price', 0)
+                    
                     approved_a = ApprovedAuction(aid, prop)
                     approved_a.proposal_id = pid
                     approved_a.status = adata.get('status', 'setup')
                     approved_a.group_chat_id = adata.get('group_chat_id')
                     approved_a.force_join_links = adata.get('force_join_links', [])
+                    approved_a.bidding_active = adata.get('bidding_active', False)
+                    approved_a.is_paused = adata.get('is_paused', False)
+                    approved_a.current_player_index = adata.get('current_player_index', 0)
+                    approved_a.highest_bidder = adata.get('highest_bidder')
+                    approved_a.highest_bid = adata.get('highest_bid', approved_a.base_price)
+                    approved_a.rtm_state = adata.get('rtm_state')
+                    approved_a.rtm_base_amount = adata.get('rtm_base_amount', 0)
+                    approved_a.rtm_final_amount = adata.get('rtm_final_amount', 0)
+                    approved_a._bid_lock = threading.Lock()
+
+                    # Restore Approved Captains
+                    caps_dict = adata.get('approved_captains', {})
+                    for cid_str, cdata in caps_dict.items():
+                        cid = int(cid_str)
+                        cap = ApprovedCaptain(cid, cdata.get('name', ''), cdata.get('team_name', ''), cdata.get('purse', approved_a.purse))
+                        cap.spent = cdata.get('spent', 0)
+                        cap._saved_player_ids = cdata.get('players', [])
+                        approved_a.approved_captains[cid] = cap
+
+                    # Restore Registered Captains
+                    reg_caps = adata.get('registered_captains', {})
+                    for cid_str, rcdata in reg_caps.items():
+                        cid = int(cid_str)
+                        rcap = CaptainRegistration(cid, rcdata.get('name', ''), rcdata.get('team_name', ''))
+                        rcap.status = rcdata.get('status', 'pending')
+                        approved_a.registered_captains[cid] = rcap
+
+                    # Restore Approved Players
+                    players_dict = adata.get('approved_players', {})
+                    for pid_str, pdata in players_dict.items():
+                        pid = int(pid_str)
+                        p = ApprovedPlayer(pid, pdata.get('name', ''), pdata.get('base_price', approved_a.base_price), pdata.get('username'))
+                        p.current_bid = pdata.get('current_bid', 0)
+                        p.current_bidder_id = pdata.get('current_bidder_id')
+                        p.current_bidder_name = pdata.get('current_bidder_name')
+                        p.winning_team = pdata.get('winning_team')
+                        p.sold_price = pdata.get('sold_price', 0)
+                        p.is_sold = pdata.get('is_sold', False)
+                        approved_a.approved_players[pid] = p
+
+                    # Restore Registered Players
+                    reg_players = adata.get('registered_players', {})
+                    for pid_str, rpdata in reg_players.items():
+                        pid = int(pid_str)
+                        rp = PlayerRegistration(pid, rpdata.get('name', ''), rpdata.get('username'))
+                        rp.status = rpdata.get('status', 'pending')
+                        approved_a.registered_players[pid] = rp
+
+                    # Re-link players to captains
+                    for cap in approved_a.approved_captains.values():
+                        saved_pids = getattr(cap, '_saved_player_ids', [])
+                        cap.players = [approved_a.approved_players[spid] for spid in saved_pids if spid in approved_a.approved_players]
+
+                    # Restore Player Queue
+                    queue_ids = adata.get('player_queue_ids', [])
+                    if queue_ids:
+                        approved_a.player_queue = [approved_a.approved_players[qid] for qid in queue_ids if qid in approved_a.approved_players]
+                    elif approved_a.approved_players:
+                        approved_a.player_queue = [p for p in approved_a.approved_players.values() if not p.is_sold]
+
+                    # Restore Sold Players & Unsold Players
+                    sold_dict = adata.get('sold_players', {})
+                    for sid_str, sdata in sold_dict.items():
+                        sid = int(sid_str)
+                        sp = approved_a.approved_players.get(sid)
+                        if sp:
+                            approved_a.sold_players[sid] = sp
+
+                    unsold_dict = adata.get('unsold_players', {})
+                    for uid_str, udata in unsold_dict.items():
+                        uid = int(uid_str)
+                        up = approved_a.approved_players.get(uid)
+                        if up:
+                            approved_a.unsold_players[uid] = up
+
+                    # Restore Current Player
+                    curr_pid = adata.get('current_player_id')
+                    if curr_pid and curr_pid in approved_a.approved_players:
+                        approved_a.current_player = approved_a.approved_players[curr_pid]
+                    elif approved_a.current_player_index < len(approved_a.player_queue):
+                        approved_a.current_player = approved_a.player_queue[approved_a.current_player_index]
+
                     self.approved_auctions[aid] = approved_a
                     if aid > self.auction_counter:
                         self.auction_counter = aid
 
-                logger.info(f"Loaded {len(self.auction_proposals)} proposals and {len(self.approved_auctions)} approved auctions from DB")
+                logger.info(f"Loaded {len(self.auction_proposals)} proposals and {len(self.approved_auctions)} approved auctions with deep state from DB")
         except Exception as e:
-            logger.warning(f"Error loading auction state from DB: {e}")
+            logger.warning(f"Error loading auction state from DB: {e}", exc_info=True)
 
     def create_auction_proposal(self, creator_id: int, creator_name: str) -> int:
         """Create a new auction proposal"""
@@ -15073,6 +15255,7 @@ async def handle_manual_auction_input(update: Update, context: ContextTypes.DEFA
                     }
                     
                     logger.info(f"Bid updated: {user_captain.name} bid {bid_amount}Cr")
+                    bot_instance.save_auction_state()
                     
                     # Confirm bid received with immediate feedback
                     await update.message.reply_text(
@@ -16617,6 +16800,7 @@ async def hostpanel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 [InlineKeyboardButton("⏭️ Skip Player (Unsold)", callback_data=f"host_skip_{auction_id}")],
                 [InlineKeyboardButton("🔄 Rebid Current", callback_data=f"host_rebid_current_{auction_id}")],
                 [InlineKeyboardButton("👨‍⚖️ Manual Assign", callback_data=f"host_assign_{auction_id}")],
+                [InlineKeyboardButton("💾 Save State to DB", callback_data=f"host_save_{auction_id}")],
                 [InlineKeyboardButton("⏹️ End Auction", callback_data=f"host_end_{auction_id}")],
                 [InlineKeyboardButton("📊 Auction Info", callback_data=f"host_info_{auction_id}")]
             ])
@@ -17105,11 +17289,20 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
                             await context.bot.send_message(chat_id=auction.group_chat_id, text=group_msg, parse_mode='HTML')
                         except Exception as ge:
                             logger.debug(f"Failed to notify group of pause: {ge}")
+                    bot_instance.save_auction_state()
                 else:
                     await query.answer("❌ Failed to toggle pause!", show_alert=True)
             except Exception as e:
                 logger.error(f"Error in host_pause callback: {e}", exc_info=True)
                 await query.answer("❌ Error toggling pause!", show_alert=True)
+
+        elif data.startswith("host_save_"):
+            bot_instance.save_auction_state()
+            try:
+                await query.answer("💾 Auction state saved to database! Use /resumeauction to restore anytime.", show_alert=True)
+            except Exception:
+                pass
+            return
         
         elif data.startswith("host_rebid_current_"):
             if not auction.current_player:
@@ -17581,6 +17774,7 @@ def finalize_player_sale(auction: ApprovedAuction, player, captain, amount: int)
     auction.rtm_captain = None
     auction.rtm_base_amount = 0
     auction.rtm_final_amount = 0
+    bot_instance.save_auction_state()
     
     try:
         loop = asyncio.get_running_loop()
@@ -17636,11 +17830,13 @@ async def advance_to_next_player(auction: ApprovedAuction, context: ContextTypes
             f"🎯 <b>Captains, type your bid!</b>\n"
             f"📝 Host: Reply '..' or use /sell {auction.id} to sell"
         )
+        bot_instance.save_auction_state()
         if chat_id:
             await send_auction_message(context.bot, chat_id, next_message)
     else:
         auction.status = "completed"
         auction.current_player = None
+        bot_instance.save_auction_state()
         auc_name = safe_escape(getattr(auction, 'name', 'Auction'))
         complete_msg = f"🏆 <b>AUCTION COMPLETED!</b>\n\n🎊 All players in {auc_name} have been auctioned!"
         if chat_id:
@@ -19521,8 +19717,228 @@ async def pauseauc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except Exception as e:
         logger.error(f"Error in pauseauc_command: {e}", exc_info=True)
         await update.message.reply_text("❌ An error occurred!")
+@check_banned
+@log_command("resumeauction")
+async def resumeauction_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Resume an interrupted or paused auction from the saved database state"""
+    try:
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        # Always reload the latest state from database first
+        bot_instance.load_auction_state()
+        
+        auction = None
+        if context.args:
+            try:
+                auction_id = int(context.args[0])
+                auction = bot_instance.get_approved_auction(auction_id)
+            except ValueError:
+                pass
+        
+        # Auto-detect auction if no ID provided
+        if not auction:
+            # 1. Active or paused auction in current chat
+            for a in bot_instance.approved_auctions.values():
+                if a.group_chat_id == chat.id and a.status in ("active", "paused", "ready"):
+                    auction = a
+                    break
+                    
+        if not auction:
+            # 2. Active or paused auction created by user
+            for a in bot_instance.approved_auctions.values():
+                if (a.creator_id == user.id or bot_instance.is_admin(user.id)) and a.status in ("active", "paused", "ready"):
+                    auction = a
+                    break
 
-# Duplicate rebid_command removed (merged with the first definition above)
+        if not auction:
+            # 3. ANY active or paused auction
+            for a in bot_instance.approved_auctions.values():
+                if a.status in ("active", "paused", "ready"):
+                    auction = a
+                    break
+
+        if not auction:
+            # 4. Fallback: most recent approved auction
+            if bot_instance.approved_auctions:
+                latest_id = max(bot_instance.approved_auctions.keys())
+                auction = bot_instance.approved_auctions[latest_id]
+
+        if not auction:
+            await update.message.reply_text(
+                "❌ <b>No saved auction found!</b>\n\n"
+                "Use <code>/register</code> to create a new auction proposal.",
+                parse_mode='HTML'
+            )
+            return
+
+        # Check authorization: Creator, Bot Admin, or Group Admin
+        is_chat_admin = False
+        if chat.type in ('group', 'supergroup'):
+            try:
+                member = await context.bot.get_chat_member(chat.id, user.id)
+                if member.status in ('creator', 'administrator'):
+                    is_chat_admin = True
+            except Exception:
+                pass
+
+        if auction.creator_id != user.id and not bot_instance.is_admin(user.id) and not is_chat_admin:
+            await update.message.reply_text("⛔ <b>Access Denied!</b> Only the auction host or admins can resume this auction.", parse_mode='HTML')
+            return
+
+        # Link group chat if not set
+        if chat.type in ('group', 'supergroup') and not auction.group_chat_id:
+            auction.group_chat_id = chat.id
+
+        # Resume state
+        if auction.status in ("paused", "setup", "ready") or auction.is_paused:
+            auction.status = "active"
+            auction.is_paused = False
+            auction.bidding_active = True
+
+        # Save resumed state to database
+        bot_instance.save_auction_state()
+
+        # Format stats
+        captains_count = len(getattr(auction, 'approved_captains', {}))
+        teams_count = len(getattr(auction, 'teams', []))
+        total_players = len(getattr(auction, 'approved_players', {}))
+        sold_count = len(getattr(auction, 'sold_players', {}))
+        queue_len = len(getattr(auction, 'player_queue', []))
+        curr_idx = getattr(auction, 'current_player_index', 0)
+        remaining_in_queue = max(0, queue_len - curr_idx)
+
+        # Team purses summary
+        purses_summary = []
+        for cap in getattr(auction, 'approved_captains', {}).values():
+            squad_count = len(getattr(cap, 'players', []))
+            purses_summary.append(
+                f"  • <b>{safe_escape(cap.team_name)}:</b> {format_amount(cap.purse)} ({squad_count} players)"
+            )
+        purses_text = "\n".join(purses_summary) if purses_summary else "  <i>No captains approved yet</i>"
+
+        resume_msg = (
+            f"▶️ <b>AUCTION RESUMED SUCCESSFULLY!</b>\n\n"
+            f"🏆 <b>Auction:</b> {safe_escape(auction.name)} (ID: <code>#{auction.id}</code>)\n"
+            f"👤 <b>Host:</b> {safe_escape(auction.creator_name)}\n"
+            f"📊 <b>State:</b> {auction.status.upper()}\n"
+            f"👑 <b>Captains:</b> {captains_count}/{teams_count}\n"
+            f"📋 <b>Players:</b> {total_players} total | {sold_count} sold | {remaining_in_queue} in queue\n\n"
+            f"💳 <b>Team Purses:</b>\n{purses_text}\n"
+        )
+
+        curr_player = getattr(auction, 'current_player', None)
+        if curr_player:
+            curr_p_name = safe_escape(getattr(curr_player, 'name', 'Unknown'))
+            curr_p_base = format_amount(getattr(curr_player, 'base_price', auction.base_price))
+            curr_bid_val = format_amount(getattr(auction, 'highest_bid', curr_player.base_price))
+            bidder_name = "None"
+            if getattr(auction, 'highest_bidder', None):
+                bidder_cap = auction.approved_captains.get(auction.highest_bidder)
+                bidder_name = safe_escape(bidder_cap.team_name if bidder_cap else f"Captain {auction.highest_bidder}")
+
+            resume_msg += (
+                f"\n🎯 <b>Current Player on Podium ({curr_idx + 1}/{queue_len}):</b>\n"
+                f"👤 <b>{curr_p_name}</b>\n"
+                f"💎 <b>Base Price:</b> {curr_p_base}\n"
+                f"💰 <b>Highest Bid:</b> {curr_bid_val} (by {bidder_name})\n"
+            )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("🎮 Host Panel", callback_data=f"host_panel_{auction.id}"),
+                InlineKeyboardButton("💾 Save State", callback_data=f"host_save_{auction.id}")
+            ]
+        ]
+
+        await update.message.reply_text(
+            resume_msg,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+
+        # If in active bidding on a player, re-announce to the group chat
+        target_chat = auction.group_chat_id or chat.id
+        if curr_player and auction.status == "active" and target_chat:
+            captain_purses = "\n".join([
+                f"• {safe_escape(getattr(cap, 'team_name', 'Team'))}: {format_amount(getattr(cap, 'purse', 0))}"
+                for cap in getattr(auction, 'approved_captains', {}).values()
+            ])
+            curr_p_name = safe_escape(getattr(curr_player, 'name', 'Unknown'))
+            curr_p_user = f"@{curr_player.username}" if getattr(curr_player, 'username', None) else ""
+            curr_base = format_amount(getattr(curr_player, 'base_price', auction.base_price))
+            
+            announce_msg = (
+                f"🎯 <b>AUCTION RESUMED - LIVE BIDDING ({curr_idx + 1}/{queue_len})</b>\n\n"
+                f"👤 <b>{curr_p_name}</b> {safe_escape(curr_p_user)}\n"
+                f"💎 <b>Base Price:</b> {curr_base}\n"
+                f"💰 <b>Current Highest Bid:</b> {format_amount(getattr(auction, 'highest_bid', curr_player.base_price))}\n\n"
+                f"💳 <b>Team Purses:</b>\n{captain_purses}\n\n"
+                f"🎯 <b>Captains, type your bids in chat!</b>\n"
+                f"📝 Host: Reply '..' or use <code>/sell {auction.id}</code> to sell"
+            )
+            await send_auction_message(context.bot, target_chat, announce_msg)
+
+    except Exception as e:
+        logger.error(f"Error in resumeauction_command: {e}", exc_info=True)
+        await update.message.reply_text("❌ An error occurred while resuming the auction.")
+
+@check_banned
+@log_command("saveauction")
+async def saveauction_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually force-save auction state to database checkpoint"""
+    try:
+        user = update.effective_user
+        chat = update.effective_chat
+        
+        auction = None
+        if context.args:
+            try:
+                auction_id = int(context.args[0])
+                auction = bot_instance.get_approved_auction(auction_id)
+            except ValueError:
+                pass
+        
+        if not auction:
+            for a in bot_instance.approved_auctions.values():
+                if a.group_chat_id == chat.id or a.creator_id == user.id:
+                    auction = a
+                    break
+
+        if not auction:
+            if bot_instance.approved_auctions:
+                latest_id = max(bot_instance.approved_auctions.keys())
+                auction = bot_instance.approved_auctions[latest_id]
+
+        if not auction:
+            await update.message.reply_text("❌ No auction found to save!", parse_mode='HTML')
+            return
+
+        if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
+            await update.message.reply_text("❌ Only the auction host or admin can save auction state!")
+            return
+
+        bot_instance.save_auction_state()
+
+        sold_count = len(getattr(auction, 'sold_players', {}))
+        captains_count = len(getattr(auction, 'approved_captains', {}))
+        queue_len = len(getattr(auction, 'player_queue', []))
+        curr_idx = getattr(auction, 'current_player_index', 0)
+
+        await update.message.reply_text(
+            f"💾 <b>AUCTION STATE SAVED TO DATABASE</b>\n\n"
+            f"🏆 <b>Auction:</b> {safe_escape(auction.name)} (ID: <code>#{auction.id}</code>)\n"
+            f"📊 <b>State:</b> {auction.status.upper()}\n"
+            f"👑 <b>Captains:</b> {captains_count}\n"
+            f"🎯 <b>Players Sold:</b> {sold_count}\n"
+            f"⏳ <b>Current Index:</b> {curr_idx + 1}/{queue_len}\n"
+            f"⏰ <b>Saved At:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"✅ <i>State is securely stored in PostgreSQL. If the bot restarts or redeploys, run <code>/resumeauction {auction.id}</code> to continue instantly!</i>",
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"Error in saveauction_command: {e}", exc_info=True)
+        await update.message.reply_text("❌ An error occurred while saving auction state.")
 
 
 
@@ -21610,8 +22026,9 @@ def register_commands(application):
     application.add_handler(CommandHandler("removepauc", removepauc_command))
     # New auction management commands
     application.add_handler(CommandHandler("unsold", unsold_command))
-    application.add_handler(CommandHandler("addpt", addpt_command))
-    application.add_handler(CommandHandler(["pauseauc", "pause", "resume"], pauseauc_command))
+    application.add_handler(CommandHandler(["resumeauction", "auctionresume", "resume"], resumeauction_command))
+    application.add_handler(CommandHandler(["saveauction", "auctionsave"], saveauction_command))
+    application.add_handler(CommandHandler(["pauseauc", "pause"], pauseauc_command))
     application.add_handler(CommandHandler("rtm", rtm_command))
     application.add_handler(CommandHandler(["approvertm", "rtmyes"], approvertm_command))
     application.add_handler(CommandHandler(["rejectrtm", "rtmno"], rejectrtm_command))
