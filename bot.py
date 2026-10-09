@@ -1554,8 +1554,10 @@ def db_query(read_only=False, return_conn=False, fallback=None):
 
 async def check_channel_membership(user_id: int, bot) -> tuple[bool, list]:
     """Check if user is member of all required channels"""
-    not_joined = []
+    if not bot_instance or not getattr(bot_instance, 'required_channels', None):
+        return True, []
     
+    not_joined = []
     for channel in bot_instance.required_channels:
         try:
             member = await bot.get_chat_member(f"@{channel['username']}", user_id)
@@ -1955,11 +1957,8 @@ class ArenaOfChampionsBot:
         self.super_admin_id = int(os.getenv('SUPER_ADMIN_ID', '0'))  # Creator/Super Admin
         self.admin_ids = [int(x.strip()) for x in os.getenv('ADMIN_IDS', '').split(',') if x.strip()]
         
-        # Required channels/groups for bot access
-        self.required_channels = [
-            {'username': 'SagaArenaOfficial', 'name': 'Saga Arena | Official', 'url': 'https://t.me/SagaArenaOfficial'},
-            {'username': 'SagaArenaChat', 'name': 'Saga Arena • Community', 'url': 'https://t.me/SagaArenaChat'}
-        ]
+        # Required channels/groups for bot access (empty list disables force join)
+        self.required_channels = []
         
         # Validate required environment variables
         if not self.bot_token:
@@ -15484,33 +15483,34 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         user = update.effective_user
         display_name = user.full_name or user.first_name or f"User{user.id}"
         
-        # Check channel membership first
-        is_member, not_joined = await check_channel_membership(user.id, context.bot)
-        if not is_member:
-            # Create inline keyboard with join buttons
-            keyboard = []
-            for channel in not_joined:
-                keyboard.append([InlineKeyboardButton(f"📢 Join {channel['name']}", url=channel['url'])])
-            keyboard.append([InlineKeyboardButton("✅ I've Joined - Continue", callback_data="check_membership")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                "╭─────────────────────╮\n"
-                "│   🏆 ARENA OF CHAMPIONS 🏏   │\n"
-                "╰─────────────────────╯\n\n"
-                "🔒 <b>MEMBERSHIP REQUIRED</b>\n\n"
-                "To access Arena of Champions, you must join our official channels:\n\n"
-                "🌟 Stay updated with announcements\n"
-                "💬 Connect with the community\n"
-                "🎁 Get exclusive rewards & updates\n\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "👇 <b>JOIN NOW TO START PLAYING!</b> 👇\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
-            return
+        # Check channel membership if required channels configured
+        if bot_instance and bot_instance.required_channels:
+            is_member, not_joined = await check_channel_membership(user.id, context.bot)
+            if not is_member:
+                # Create inline keyboard with join buttons
+                keyboard = []
+                for channel in not_joined:
+                    keyboard.append([InlineKeyboardButton(f"📢 Join {channel['name']}", url=channel['url'])])
+                keyboard.append([InlineKeyboardButton("✅ I've Joined - Continue", callback_data="check_membership")])
+                
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    "╭─────────────────────╮\n"
+                    "│   🏆 ARENA OF CHAMPIONS 🏏   │\n"
+                    "╰─────────────────────╯\n\n"
+                    "🔒 <b>MEMBERSHIP REQUIRED</b>\n\n"
+                    "To access Arena of Champions, you must join our official channels:\n\n"
+                    "🌟 Stay updated with announcements\n"
+                    "💬 Connect with the community\n"
+                    "🎁 Get exclusive rewards & updates\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "👇 <b>JOIN NOW TO START PLAYING!</b> 👇\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━",
+                    reply_markup=reply_markup,
+                    parse_mode='HTML'
+                )
+                return
         
         # Register user in database if not exists
         success, is_new_user = bot_instance.create_or_update_player(
