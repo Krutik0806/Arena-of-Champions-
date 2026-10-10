@@ -6060,6 +6060,14 @@ class ArenaOfChampionsBot:
                 auctions_dict = raw_data.get('auctions', {})
                 for aid_str, adata in auctions_dict.items():
                     aid = int(aid_str)
+                    existing = self.approved_auctions.get(aid)
+                    status_order = {"setup": 1, "captain_reg": 2, "player_reg": 3, "ready": 4, "active": 5, "paused": 5, "completed": 6}
+                    db_status = adata.get('status', 'setup')
+                    if existing and status_order.get(getattr(existing, 'status', 'setup'), 0) > status_order.get(db_status, 0):
+                        logger.info(f"Preserving active in-memory auction {aid} (status {existing.status}) over DB snapshot ({db_status})")
+                        self.save_auction_state()
+                        continue
+
                     pid = adata.get('proposal_id', aid)
                     prop = self.auction_proposals.get(pid)
                     if not prop:
@@ -6272,10 +6280,11 @@ class ArenaOfChampionsBot:
     def start_captain_registration(self, auction_id: int) -> bool:
         """Start captain registration phase"""
         auction = self.get_approved_auction(auction_id)
-        if not auction or auction.status != "setup":
+        if not auction or auction.status not in ["setup", "captain_reg"]:
             return False
         
         auction.status = "captain_reg"
+        self.save_auction_state()
         logger.info(f"Started captain registration for auction {auction_id}")
         return True
     
@@ -6294,6 +6303,7 @@ class ArenaOfChampionsBot:
         
         registration = CaptainRegistration(user_id, name, team_name)
         auction.registered_captains[user_id] = registration
+        self.save_auction_state()
         
         logger.info(f"Captain registration request: {name} for team {team_name} in auction {auction_id}")
         return True
@@ -6309,6 +6319,7 @@ class ArenaOfChampionsBot:
         
         captain = ApprovedCaptain(user_id, registration.name, registration.team_name, auction.purse)
         auction.approved_captains[user_id] = captain
+        self.save_auction_state()
         
         logger.info(f"Approved captain {registration.name} for auction {auction_id}")
         return True
@@ -6321,6 +6332,7 @@ class ArenaOfChampionsBot:
         
         registration = auction.registered_captains[user_id]
         registration.status = "rejected"
+        self.save_auction_state()
         
         logger.info(f"Rejected captain {registration.name} for auction {auction_id}")
         return True
@@ -6328,11 +6340,12 @@ class ArenaOfChampionsBot:
     def start_player_registration(self, auction_id: int) -> bool:
         """Start player registration phase (runs alongside captain registration)"""
         auction = self.get_approved_auction(auction_id)
-        if not auction or auction.status not in ["captain_reg", "player_reg"]:
+        if not auction or auction.status not in ["setup", "captain_reg", "player_reg"]:
             return False
         
         # Change to player_reg to enable both captain and player registration
         auction.status = "player_reg"
+        self.save_auction_state()
         
         logger.info(f"Started player registration for auction {auction_id}")
         return True
@@ -6352,6 +6365,7 @@ class ArenaOfChampionsBot:
         
         registration = PlayerRegistration(user_id, name, username)
         auction.registered_players[user_id] = registration
+        self.save_auction_state()
         
         logger.info(f"Player registration request: {name} in auction {auction_id}")
         return True
@@ -6370,6 +6384,7 @@ class ArenaOfChampionsBot:
         
         # Add to player queue
         auction.player_queue.append(player)
+        self.save_auction_state()
         
         logger.info(f"Approved player {registration.name} for auction {auction_id}")
         return True
@@ -6382,6 +6397,7 @@ class ArenaOfChampionsBot:
         
         registration = auction.registered_players[user_id]
         registration.status = "rejected"
+        self.save_auction_state()
         
         logger.info(f"Rejected player {registration.name} for auction {auction_id}")
         return True
@@ -6393,13 +6409,14 @@ class ArenaOfChampionsBot:
             return False
         
         auction.status = "ready"
-        if auction.randomize_players:
+        if getattr(auction, 'randomize_players', False):
             import random
             random.shuffle(auction.player_queue)
             logger.info(f"Closed registration for auction {auction_id}, {len(auction.player_queue)} players ready (randomized)")
         else:
             logger.info(f"Closed registration for auction {auction_id}, {len(auction.player_queue)} players ready (sequential order)")
         
+        self.save_auction_state()
         return True
     
     def start_auction_bidding(self, auction_id: int) -> bool:
@@ -6428,6 +6445,7 @@ class ArenaOfChampionsBot:
         auction.highest_bidder = None
         auction.highest_bid = getattr(auction.current_player, 'base_price', auction.base_price)
         
+        self.save_auction_state()
         logger.info(f"Started auction bidding for auction {auction_id}, shuffled {len(auction.player_queue)} players")
         return True
     
@@ -6571,6 +6589,7 @@ class ArenaOfChampionsBot:
             
             # Log using captured reference (not auction.current_player which is now next player)
             logger.info(f"Player sold: {sold_player.name} to {captain.team_name} for {amount}Cr")
+            self.save_auction_state()
             return True
         finally:
             auction._bid_lock.release()
@@ -6609,6 +6628,7 @@ class ArenaOfChampionsBot:
                 auction.status = "completed"
             
             logger.info(f"Marked player {current.name} as UNSOLD")
+            self.save_auction_state()
             return True
         finally:
             auction._bid_lock.release()
@@ -6666,6 +6686,7 @@ class ArenaOfChampionsBot:
                     auction.status = "completed"
             
             logger.info(f"Manual assignment: {player.name} to {captain.team_name} for {amount}Cr")
+            self.save_auction_state()
             return True
         finally:
             auction._bid_lock.release()
@@ -6678,7 +6699,7 @@ class ArenaOfChampionsBot:
         
         auction.status = "completed"
         auction.current_player = None
-        
+        self.save_auction_state()
         logger.info(f"Auction {auction_id} completed")
         return True
     
@@ -6690,6 +6711,7 @@ class ArenaOfChampionsBot:
         
         auction.is_paused = not auction.is_paused
         status = "paused" if auction.is_paused else "resumed"
+        self.save_auction_state()
         logger.info(f"Auction {auction_id} {status}")
         return True
     
@@ -6775,6 +6797,7 @@ class ArenaOfChampionsBot:
             auction.rtm_final_amount = 0
             
             logger.info(f"Player {player.name} brought back for immediate rebidding in auction {auction_id}")
+            self.save_auction_state()
             return (True, "Success", player)
         finally:
             auction._bid_lock.release()
@@ -16760,28 +16783,56 @@ async def hostpanel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Host panel for auction control"""
     try:
         user = update.effective_user
+        query = update.callback_query
         
-        if len(context.args) < 1:
-            await update.message.reply_text(
+        auction_id = None
+        if context.args and len(context.args) >= 1:
+            try:
+                auction_id = int(context.args[0])
+            except ValueError:
+                pass
+        elif query and query.data:
+            try:
+                auction_id = int(query.data.split('_')[-1])
+            except (ValueError, IndexError):
+                pass
+        
+        async def send_response(text: str, reply_markup=None):
+            if query:
+                try:
+                    await query.edit_message_text(text, parse_mode='HTML', reply_markup=reply_markup)
+                    return
+                except Exception:
+                    pass
+            chat = update.effective_chat
+            if chat:
+                await context.bot.send_message(chat_id=chat.id, text=text, parse_mode='HTML', reply_markup=reply_markup)
+            elif update.message:
+                await update.message.reply_text(text, parse_mode='HTML', reply_markup=reply_markup)
+
+        if not auction_id:
+            await send_response(
                 "❌ <b>Usage:</b> <code>/hostpanel [auction_id]</code>\n\n"
-                "<b>Example:</b> <code>/hostpanel 5</code>",
-                parse_mode='HTML'
+                "<b>Example:</b> <code>/hostpanel 5</code>"
             )
-            return
-        
-        try:
-            auction_id = int(context.args[0])
-        except ValueError:
-            await update.message.reply_text("❌ Please provide a valid auction ID number.")
             return
         
         auction = bot_instance.get_approved_auction(auction_id)
         if not auction:
-            await update.message.reply_text("❌ Auction not found!")
+            await send_response("❌ Auction not found!")
             return
         
-        if auction.creator_id != user.id and not bot_instance.is_admin(user.id):
-            await update.message.reply_text("❌ Only the auction creator can access the host panel!")
+        is_chat_admin = False
+        if update.effective_chat and update.effective_chat.type in ('group', 'supergroup'):
+            try:
+                member = await context.bot.get_chat_member(update.effective_chat.id, user.id)
+                if member.status in ('creator', 'administrator'):
+                    is_chat_admin = True
+            except Exception:
+                pass
+
+        if auction.creator_id != user.id and not bot_instance.is_admin(user.id) and not is_chat_admin:
+            await send_response("❌ Only the auction creator or group admin can access the host panel!")
             return
         
         # Create host panel keyboard
@@ -16791,6 +16842,7 @@ async def hostpanel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             # Stage 1: Initial setup
             keyboard.extend([
                 [InlineKeyboardButton("🚀 Start Captain Registration", callback_data=f"host_start_captain_{auction_id}")],
+                [InlineKeyboardButton("👥 Start Player Registration", callback_data=f"host_start_player_{auction_id}")],
                 [InlineKeyboardButton("💬 Set Group Chat", callback_data=f"host_set_gc_{auction_id}")],
                 [InlineKeyboardButton("📊 Auction Info", callback_data=f"host_info_{auction_id}")]
             ])
@@ -16813,6 +16865,7 @@ async def hostpanel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             # Stage 4: Ready to start auction
             keyboard.extend([
                 [InlineKeyboardButton("🔥 START AUCTION", callback_data=f"host_start_auction_{auction_id}")],
+                [InlineKeyboardButton("👥 Re-open Player Reg", callback_data=f"host_start_player_{auction_id}")],
                 [InlineKeyboardButton("📊 Auction Info", callback_data=f"host_info_{auction_id}")]
             ])
         elif auction.status == "active":
@@ -16833,29 +16886,46 @@ async def hostpanel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        status_emoji = {
-            'setup': '🔧',
-            'captain_reg': '👑',
-            'player_reg': '👥',
-            'ready': '⚡',
-            'active': '🔥',
-            'completed': '✅'
-        }.get(auction.status, '❓')
-        
+        status_label = {
+            'setup': '🔧 Setup (Ready to start registration)',
+            'captain_reg': '👑 Captain Registration Open',
+            'player_reg': '👥 Player & Captain Reg Open',
+            'ready': '⚡ Ready to Start Auction',
+            'active': '🔥 Auction Active (Bidding in progress)',
+            'completed': '✅ Auction Completed'
+        }.get(auction.status, auction.status.title())
+
+        pending_captains = len([c for c in getattr(auction, 'registered_captains', {}).values() if getattr(c, 'status', '') == "pending"])
+        pending_players = len([p for p in getattr(auction, 'registered_players', {}).values() if getattr(p, 'status', '') == "pending"])
+
+        cap_text = f"{len(auction.approved_captains)} approved"
+        if pending_captains:
+            cap_text += f" ({pending_captains} pending)"
+
+        play_text = f"{len(auction.approved_players)} approved"
+        if pending_players:
+            play_text += f" ({pending_players} pending)"
+
         message = (
-            f"🎮 <b>Host Panel - {auction.name}</b>\n\n"
-            f"🆔 <b>ID:</b> {auction_id}\n"
-            f"{status_emoji} <b>Status:</b> {auction.status.title()}\n"
-            f"👑 <b>Captains:</b> {len(auction.approved_captains)}\n"
-            f"👥 <b>Players:</b> {len(auction.approved_players)}\n\n"
+            f"🎮 <b>Host Panel - {html.escape(auction.name)}</b>\n\n"
+            f"🆔 <b>ID:</b> <code>{auction_id}</code>\n"
+            f"📊 <b>Status:</b> {status_label}\n"
+            f"👑 <b>Captains:</b> {cap_text}\n"
+            f"👥 <b>Players:</b> {play_text}\n\n"
             f"🎯 <b>Choose an action:</b>"
         )
         
-        await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        await send_response(message, reply_markup=reply_markup)
         
     except Exception as e:
-        logger.error(f"Error in hostpanel_command: {e}")
-        await update.message.reply_text("❌ An error occurred!")
+        logger.error(f"Error in hostpanel_command: {e}", exc_info=True)
+        if update.callback_query:
+            try:
+                await update.callback_query.answer("❌ An error occurred!", show_alert=True)
+            except Exception:
+                pass
+        elif update.message:
+            await update.message.reply_text("❌ An error occurred!")
 
 # ====================================
 # CAPTAIN REGISTRATION COMMANDS
@@ -17114,11 +17184,17 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
         # Set group chat ID if not set
         if auction.group_chat_id is None and update.effective_chat.type in ['group', 'supergroup']:
             auction.group_chat_id = update.effective_chat.id
+            bot_instance.save_auction_state()
             logger.info(f"Set group chat ID {auction.group_chat_id} for auction {auction_id}")
         
         if data.startswith("host_start_captain_"):
             success = bot_instance.start_captain_registration(auction_id)
-            if success:
+            keyboard = [
+                [InlineKeyboardButton("👥 Start Player Registration", callback_data=f"host_start_player_{auction_id}")],
+                [InlineKeyboardButton("🎛️ Host Panel", callback_data=f"host_panel_{auction_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            if success or auction.status in ["captain_reg", "player_reg"]:
                 await query.edit_message_text(
                     f"✅ <b>Captain Registration Started!</b>\n\n"
                     f"🏆 <b>Auction:</b> {auction.name}\n"
@@ -17127,12 +17203,21 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
                     f"<code>/regcap {auction_id} [team_name]</code>\n\n"
                     f"🏏 <b>Available Teams:</b>\n" + 
                     '\n'.join(f"• {team}" for team in auction.teams),
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
                 )
+            else:
+                await query.answer("❌ Could not start captain registration.", show_alert=True)
         
         elif data.startswith("host_start_player_"):
             success = bot_instance.start_player_registration(auction_id)
-            if success:
+            keyboard = [
+                [InlineKeyboardButton("✅ Approve Players", callback_data=f"host_approve_players_{auction_id}")],
+                [InlineKeyboardButton("🔒 Close Registration", callback_data=f"host_close_reg_{auction_id}")],
+                [InlineKeyboardButton("🎛️ Host Panel", callback_data=f"host_panel_{auction_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            if success or auction.status == "player_reg":
                 await query.edit_message_text(
                     f"✅ <b>Player Registration Started!</b>\n\n"
                     f"🏆 <b>Auction:</b> {auction.name}\n"
@@ -17140,8 +17225,11 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
                     f"📢 <b>Players can now register with:</b>\n"
                     f"<code>/regplay {auction_id}</code>\n\n"
                     f"⚡ <b>Simple Process:</b> Players just send one command!",
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
                 )
+            else:
+                await query.answer("❌ Could not start player registration.", show_alert=True)
         
         elif data.startswith("host_approve_captains_"):
             # Get all pending captain registrations
@@ -17154,12 +17242,17 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
                     approved_count += 1
             
             if approved_count > 0:
+                keyboard = [
+                    [InlineKeyboardButton("👥 Start Player Registration", callback_data=f"host_start_player_{auction_id}")],
+                    [InlineKeyboardButton("🎛️ Host Panel", callback_data=f"host_panel_{auction_id}")]
+                ]
                 await query.edit_message_text(
                     f"✅ <b>{approved_count} Captains Approved!</b>\n\n"
                     f"🏆 <b>Auction:</b> {auction.name}\n"
                     f"👑 <b>Total Approved Captains:</b> {len(auction.approved_captains)}\n\n"
                     f"🚀 <b>Ready to start player registration!</b>",
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
                 
                 # Send notification to group chat if set
@@ -17180,7 +17273,10 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
                     except Exception as e:
                         logger.error(f"Failed to send group notification: {e}")
             else:
-                await query.edit_message_text("❌ No pending captains to approve!")
+                keyboard = [
+                    [InlineKeyboardButton("🎛️ Host Panel", callback_data=f"host_panel_{auction_id}")]
+                ]
+                await query.edit_message_text("❌ No pending captains to approve!", reply_markup=InlineKeyboardMarkup(keyboard))
         
         elif data.startswith("host_approve_players_"):
             # Get all pending player registrations
@@ -17193,15 +17289,23 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
                     approved_count += 1
             
             if approved_count > 0:
+                keyboard = [
+                    [InlineKeyboardButton("🔒 Close Registration", callback_data=f"host_close_reg_{auction_id}")],
+                    [InlineKeyboardButton("🎛️ Host Panel", callback_data=f"host_panel_{auction_id}")]
+                ]
                 await query.edit_message_text(
                     f"✅ <b>{approved_count} Players Approved!</b>\n\n"
                     f"🏆 <b>Auction:</b> {auction.name}\n"
                     f"👥 <b>Total Approved Players:</b> {len(auction.approved_players)}\n\n"
                     f"🚀 <b>Ready to close registration and start auction!</b>",
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             else:
-                await query.edit_message_text("❌ No pending players to approve!")
+                keyboard = [
+                    [InlineKeyboardButton("🎛️ Host Panel", callback_data=f"host_panel_{auction_id}")]
+                ]
+                await query.edit_message_text("❌ No pending players to approve!", reply_markup=InlineKeyboardMarkup(keyboard))
         
         elif data.startswith("host_close_reg_"):
             keyboard = [
@@ -17234,6 +17338,10 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
             success = bot_instance.close_registration(auction_id)
             if success:
                 order_text = "🎲 Random" if randomize else "📋 Sequential"
+                keyboard = [
+                    [InlineKeyboardButton("🔥 START AUCTION", callback_data=f"host_start_auction_{auction_id}")],
+                    [InlineKeyboardButton("🎛️ Host Panel", callback_data=f"host_panel_{auction_id}")]
+                ]
                 await query.edit_message_text(
                     f"🔒 <b>Registration Closed!</b>\n\n"
                     f"🏆 <b>Auction:</b> {auction.name}\n"
@@ -17242,8 +17350,9 @@ async def handle_host_panel_callbacks(update: Update, context: ContextTypes.DEFA
                     f"👑 Captains: {len(auction.approved_captains)}\n"
                     f"👥 Players: {len(auction.approved_players)}\n\n"
                     f"🚀 <b>Ready to start auction!</b>\n"
-                    f"Use host panel to begin bidding.",
-                    parse_mode='HTML'
+                    f"Use host panel or the button below to begin bidding.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
         
         elif data.startswith("host_panel_"):
